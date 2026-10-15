@@ -16,8 +16,9 @@
 4. [Idempotency](#4--idempotency)
 5. [Concurrency](#5--concurrency)
 6. [Phase 1 Scope](#6--phase-1-scope)
-7. [Stack & Rationale](#7--stack--rationale)
-8. [Open Questions](#8--open-questions)
+7. [Module Boundaries](#7--module-boundaries)
+8. [Stack & Rationale](#8--stack--rationale)
+9. [Open Questions](#9--open-questions)
 
 ---
 
@@ -219,7 +220,63 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A, and each transaction lock
 
 ---
 
-## 7. 🧱 Stack & Rationale
+## 7. 🧩 Module Boundaries
+
+> 🟡 **Draft.** Proposed after review; waiting on decisions M1–M3.
+
+### Rules ✅
+
+1. **Every table has exactly one owner module.** Only the owner writes to it.
+2. Other modules go through the owner's **exported service**, never `prisma.<otherTable>` directly.
+3. Dependencies point **one way**. No cycles.
+4. Cross-cutting concerns (validation, errors, idempotency, logging) live in `common/`, not in domain modules.
+
+### Proposed modules
+
+| Module | Responsibility | Owns (tables) |
+|---|---|---|
+| `AuthModule` | Sign-up, login (JWT), OTP, forgot password | `credentials`, `otp_codes`, `refresh_tokens` |
+| `CustomersModule` | Customer profile | `customers` |
+| `KycModule` | Tiers, mocked NIN/BVN/liveness, **limit policy** | `kyc_verifications` |
+| `AccountsModule` | Account opening, NUBAN generation, status (**no balance**) | `accounts` |
+| `LedgerModule` | **The only writer of money.** Postings, the debit = credit rule, balances, row locks | `journal_entries`, `ledger_lines`, `ledger_balances` |
+| `TransfersModule` | Use-case orchestration: validate → limits → post to the ledger | `transfers` |
+| `NotificationsModule` | `NotificationSender` interface + console / email implementations | — |
+| `PrismaModule` *(infrastructure)* | Database client, transaction helper | — |
+| `common/` *(not a module)* | Idempotency interceptor, exception filters, validation pipes | `idempotency_keys` |
+
+### Decisions
+
+| # | Decision | Status |
+|:---:|---|:---:|
+| M1 | The **balance lives in a Ledger-owned table** (`ledger_balances`, keyed by account ID). `accounts` holds metadata only: number, status, customer. | ✅ |
+| M2 | Several modules share **one DB transaction** by passing the transaction client (`tx`) between services | 🟡 |
+| M3 | **Policy checks** (KYC limits, ownership) live in the use-case module (`TransfersModule`). The Ledger only records money. | 🟡 |
+
+### Dependency direction
+
+```mermaid
+flowchart TD
+    T[TransfersModule] --> L[LedgerModule]
+    T --> A[AccountsModule]
+    T --> K[KycModule]
+    T --> N[NotificationsModule]
+    A --> C[CustomersModule]
+    K --> C
+    AU[AuthModule] --> C
+    AU --> N
+    L --> P[(PrismaModule)]
+    A --> P
+    C --> P
+    K --> P
+    T --> P
+```
+
+> `LedgerModule` depends on **no other domain module**. It knows about money, not about people, OTPs or tiers.
+
+---
+
+## 8. 🧱 Stack & Rationale
 
 | Layer | Choice | Status |
 |---|---|:---:|
@@ -243,7 +300,7 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A, and each transaction lock
 
 ---
 
-## 8. ❓ Open Questions
+## 9. ❓ Open Questions
 
 | # | Question | Notes |
 |:---:|---|---|

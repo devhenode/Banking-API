@@ -4,4 +4,4 @@ dist/
 *.tsbuildinfo
 coverage/
 .DS_Store
-/generated/prisma
+/src/generated/
