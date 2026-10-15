@@ -252,6 +252,9 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A, and each transaction lock
 | M1 | The **balance lives in a Ledger-owned table** (`ledger_balances`, keyed by account ID). `accounts` holds metadata only: number, status, customer. | ✅ |
 | M2 | Several modules share **one DB transaction** by passing the transaction client (`tx`) between services | 🟡 |
 | M3 | **Policy checks** (KYC limits, ownership) live in the use-case module (`TransfersModule`). The Ledger only records money. | 🟡 |
+| G1 | **Ledger has no controller.** Balance and history are served by `AccountsController`, which calls `LedgerService` read methods (`getBalance`, `getHistory`). Reads go through the owner too. | ✅ |
+| G2 | `LedgerModule` **exports only `LedgerService`**: its public methods are the only way in, and no other module touches ledger tables. | ✅ |
+| P1 | `PrismaModule` scope: `@Global()` vs explicit imports | 🟡 |
 
 ### Dependency direction
 
