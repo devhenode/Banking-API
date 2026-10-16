@@ -28,6 +28,26 @@ enum AccountType {
   CURRENT
 }
 
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum EntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum JournalEntryType {
+  DEPOSIT
+  TRANSFER
+  FEE
+  REVERSAL
+}
+
 model Customer {
   id        String         @id @default(uuid(7)) @db.Uuid
   email     String?        @unique
@@ -44,16 +64,51 @@ model Customer {
 }
 
 model Account {
-  id            String      @id @default(uuid(7)) @db.Uuid
-  customerId    String      @map("customer_id") @db.Uuid
-  accountNumber String      @unique @map("account_number") @db.Char(10)
-  currency      String      @default("NGN") @db.Char(3)
+  id            String        @id @default(uuid(7)) @db.Uuid
+  customerId    String        @map("customer_id") @db.Uuid
+  accountNumber String        @unique @map("account_number") @db.Char(10)
+  currency      String        @default("NGN") @db.Char(3)
   type          AccountType
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  closedAt      DateTime?   @map("closed_at") @db.Timestamptz(3)
-  customer      Customer    @relation(fields: [customerId], references: [id])
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  closedAt      DateTime?     @map("closed_at") @db.Timestamptz(3)
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  status        AccountStatus @default(ACTIVE)
 
   @@index([customerId])
   @@map("accounts")
+}
+
+model ledger_account {
+  id        String            @id @default(uuid(7)) @db.Uuid
+  accountId String?            @map("account_id") @db.Uuid
+  code      String?            @unique
+  type      LedgerAccountType
+  currency  String             @default("NGN") @db.Char(3)
+  balance   BigInt           @default(0)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("ledger_accounts")
+}
+
+model journal_entries {
+ id     String @id @default(uuid(7)) @db.Uuid
+ type   JournalEntryType
+ description String?
+ reversedIn String? @map("reversed_in") @db.Uuid
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+}
+
+model ledger_lines {
+  id    String @id @default(uuid(7)) @db.Uuid
+  journalEntryId String @map("journal_entry_id") @db.Uuid
+  ledgerAccountId String @map("ledger_account_id") @db.Uuid
+  direction EntryDirection
+  amount BigInt
+  currency String @default("NGN") @db.Char(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([journalEntryId])
+  @@index([ledgerAccountId, createdAt])
 }

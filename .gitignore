@@ -6,3 +6,6 @@ coverage/
 .DS_Store
 /src/generated/
 skills-lock.json
+
+# Private mentoring notes
+docs/DISCUSSION_LOG.md
