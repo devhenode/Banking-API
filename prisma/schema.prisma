@@ -67,7 +67,7 @@ model Account {
   id            String        @id @default(uuid(7)) @db.Uuid
   customerId    String        @map("customer_id") @db.Uuid
   accountNumber String        @unique @map("account_number") @db.Char(10)
-  currency      String        @default("NGN") @db.Char(3)
+  currency      String        @db.Char(3) @default("NGN")
   type          AccountType
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -75,40 +75,55 @@ model Account {
   customer      Customer      @relation(fields: [customerId], references: [id])
   status        AccountStatus @default(ACTIVE)
 
+  ledgerAccount LedgerAccount?
+
   @@index([customerId])
   @@map("accounts")
 }
 
-model ledger_account {
+model LedgerAccount {
   id        String            @id @default(uuid(7)) @db.Uuid
-  accountId String?            @map("account_id") @db.Uuid
-  code      String?            @unique
+  accountId String?           @unique @map("account_id") @db.Uuid
+  code      String?           @unique
   type      LedgerAccountType
-  currency  String             @default("NGN") @db.Char(3)
-  balance   BigInt           @default(0)
+  currency  String            @db.Char(3)
+  balance   BigInt            @default(0)
   createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  account Account?     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  lines   LedgerLine[]
 
   @@map("ledger_accounts")
 }
 
-model journal_entries {
- id     String @id @default(uuid(7)) @db.Uuid
- type   JournalEntryType
- description String?
- reversedIn String? @map("reversed_in") @db.Uuid
- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+model JournalEntry {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  type        JournalEntryType
+  description String?
+  reversesId  String?          @unique @map("reverses_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  lines      LedgerLine[]
+  reverses   JournalEntry? @relation("Reversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy JournalEntry? @relation("Reversal")
+
+  @@map("journal_entries")
 }
 
-model ledger_lines {
-  id    String @id @default(uuid(7)) @db.Uuid
-  journalEntryId String @map("journal_entry_id") @db.Uuid
-  ledgerAccountId String @map("ledger_account_id") @db.Uuid
-  direction EntryDirection
-  amount BigInt
-  currency String @default("NGN") @db.Char(3)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+model LedgerLine {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  journalEntryId  String         @map("journal_entry_id") @db.Uuid
+  ledgerAccountId String         @map("ledger_account_id") @db.Uuid
+  direction       EntryDirection
+  amount          BigInt
+  currency        String         @db.Char(3)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  journalEntry  JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  ledgerAccount LedgerAccount @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
 
   @@index([journalEntryId])
   @@index([ledgerAccountId, createdAt])
+  @@map("ledger_lines")
 }
