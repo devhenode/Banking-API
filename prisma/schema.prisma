@@ -48,17 +48,26 @@ enum JournalEntryType {
   REVERSAL
 }
 
+enum OtpPurpose {
+  REGISTRATION
+  PASSWORD_RESET
+  LOGIN
+}
+
+
 model Customer {
-  id        String         @id @default(uuid(7)) @db.Uuid
-  email     String?        @unique
-  phone     String?        @unique
-  firstName String         @map("first_name")
-  lastName  String         @map("last_name")
-  status    CustomerStatus @default(PENDING_VERIFICATION)
-  kycTier   Int            @default(0) @map("kyc_tier")
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
-  accounts  Account[]
+  id         String         @id @default(uuid(7)) @db.Uuid
+  email      String?        @unique
+  phone      String?        @unique
+  firstName  String         @map("first_name")
+  lastName   String         @map("last_name")
+  status     CustomerStatus @default(PENDING_VERIFICATION)
+  kycTier    Int            @default(0) @map("kyc_tier")
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  accounts   Account[]
+  credential Credential?
+  otpCodes   OtpCode[]     
 
   @@map("customers")
 }
@@ -67,7 +76,7 @@ model Account {
   id            String        @id @default(uuid(7)) @db.Uuid
   customerId    String        @map("customer_id") @db.Uuid
   accountNumber String        @unique @map("account_number") @db.Char(10)
-  currency      String        @db.Char(3) @default("NGN")
+  currency      String        @default("NGN") @db.Char(3)
   type          AccountType
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -126,4 +135,33 @@ model LedgerLine {
   @@index([journalEntryId])
   @@index([ledgerAccountId, createdAt])
   @@map("ledger_lines")
+}
+
+model Credential {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  customerId   String   @unique @map("customer_id") @db.Uuid
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@map("credentials")
+}
+
+model OtpCode {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  customerId String    @map("customer_id") @db.Uuid
+  codeHash   String    @map("code_hash")
+  purpose    OtpPurpose
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  attempts   Int       @default(0)
+  usedAt     DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@map("otp_codes")
+
+  @@index([customerId])
 }

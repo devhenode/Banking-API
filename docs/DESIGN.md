@@ -358,9 +358,11 @@ The `accounts` table therefore has **no balance column**.
 
 Ledger tables are **append-only, enforced in Postgres**: a trigger rejects any `UPDATE` or `DELETE` on `journal_entries` and `ledger_lines`. Application code never edits them either, but the database is the last line of defence against bugs, scripts and manual SQL sessions. Corrections are new **reversal** entries.
 
-### Secrets
+### Secrets & OTPs
 
 Password hashes live in a separate **`credentials`** table owned by `AuthModule`, never on `customers`. Many modules, queries and exports read customer data; keeping secrets elsewhere limits the blast radius of any leak or over-broad query.
+
+One-time passcodes live in **`otp_codes`** with their code hashed (`code_hash`), an expiration timestamp (`expires_at`), an attempt counter (`attempts`), and an enum purpose (`REGISTRATION`, `PASSWORD_RESET`, `LOGIN`). Raw OTPs are never stored in plaintext.
 
 ### Cross-module foreign keys
 
@@ -372,6 +374,7 @@ Foreign keys across module boundaries (e.g. `accounts.customer_id → customers.
 erDiagram
     customers ||--o{ accounts : owns
     customers ||--o| credentials : "logs in with"
+    customers ||--o{ otp_codes : receives
     customers ||--o{ kyc_verifications : submits
     accounts ||--|| ledger_accounts : "money held in"
     journal_entries ||--|{ ledger_lines : "has 2+"
@@ -450,6 +453,7 @@ erDiagram
 | ADR-20 | Cross-module foreign keys allowed in the monolith only | [8](#8--data-model) |
 | ADR-21 | All timestamps are `timestamptz` | [8](#8--data-model) |
 | ADR-22 | Database-level `CHECK` constraints back up application validation | [8](#8--data-model) |
+| ADR-23 | OTP codes stored hashed with expiration, attempt limit, and purpose enum | [8](#8--data-model) |
 
 ---
 
