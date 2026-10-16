@@ -17,8 +17,9 @@
 5. [Concurrency](#5--concurrency)
 6. [Phase 1 Scope](#6--phase-1-scope)
 7. [Module Boundaries](#7--module-boundaries)
-8. [Stack & Rationale](#8--stack--rationale)
-9. [Open Questions](#9--open-questions)
+8. [Data Model](#8--data-model)
+9. [Stack & Rationale](#9--stack--rationale)
+10. [Open Questions](#10--open-questions)
 
 ---
 
@@ -239,7 +240,7 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A, and each transaction lock
 | `CustomersModule` | Customer profile | `customers` |
 | `KycModule` | Tiers, mocked NIN/BVN/liveness, **limit policy** | `kyc_verifications` |
 | `AccountsModule` | Account opening, NUBAN generation, status (**no balance**) | `accounts` |
-| `LedgerModule` | **The only writer of money.** Postings, the debit = credit rule, balances, row locks | `journal_entries`, `ledger_lines`, `ledger_balances` |
+| `LedgerModule` | **The only writer of money.** Postings, the debit = credit rule, balances, row locks | `ledger_accounts`, `journal_entries`, `ledger_lines` |
 | `TransfersModule` | Use-case orchestration: validate → limits → post to the ledger | `transfers` |
 | `NotificationsModule` | `NotificationSender` interface + console / email implementations | — |
 | `PrismaModule` *(infrastructure)* | Database client, transaction helper | — |
@@ -249,12 +250,12 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A, and each transaction lock
 
 | # | Decision | Status |
 |:---:|---|:---:|
-| M1 | The **balance lives in a Ledger-owned table** (`ledger_balances`, keyed by account ID). `accounts` holds metadata only: number, status, customer. | ✅ |
+| M1 | The **balance lives in a Ledger-owned table** (`ledger_accounts`). `accounts` holds customer-facing metadata only: number, status, customer. | ✅ |
 | M2 | Several modules share **one DB transaction** by passing the transaction client (`tx`) between services | 🟡 |
 | M3 | **Policy checks** (KYC limits, ownership) live in the use-case module (`TransfersModule`). The Ledger only records money. | 🟡 |
 | G1 | **Ledger has no controller.** Balance and history are served by `AccountsController`, which calls `LedgerService` read methods (`getBalance`, `getHistory`). Reads go through the owner too. | ✅ |
 | G2 | `LedgerModule` **exports only `LedgerService`**: its public methods are the only way in, and no other module touches ledger tables. | ✅ |
-| P1 | `PrismaModule` scope: `@Global()` vs explicit imports | 🟡 |
+| P1 | `PrismaModule` is **not global**. Each module that owns tables imports it explicitly, so database access is visible in code review. | ✅ |
 
 ### Dependency direction
 
@@ -279,7 +280,66 @@ flowchart TD
 
 ---
 
-## 8. 🧱 Stack & Rationale
+## 8. 🗄️ Data Model
+
+### Decisions
+
+| # | Decision | Status |
+|:---:|---|:---:|
+| S1 | **Primary keys are UUID v7** (RFC 9562): unguessable, generated anywhere, **time-ordered** so B-tree indexes stay efficient. **NUBAN is a separate `UNIQUE` business key**, never the primary key. | ✅ |
+| S2 | **Journal + lines**: one `journal_entries` row per financial event, plus 2+ `ledger_lines` rows that must balance. | ✅ |
+| S3 | **Append-only, enforced in Postgres**: a trigger rejects any `UPDATE` or `DELETE` on `journal_entries` and `ledger_lines`. Corrections are new **reversal** entries. | ✅ |
+| S4 | **Password hashes live in `credentials`** (owned by `AuthModule`), never on `customers`. Many modules, queries and exports read customer data; keeping secrets elsewhere limits the blast radius of a leak. | ✅ |
+| S5 | **Cross-module foreign keys are allowed in the monolith** (one database, integrity for free). In Phase 7 they become plain ID references, validated through the owner's API or events. | ✅ |
+| S6 | **All timestamps are `timestamptz`**: exact instants (stored as UTC), so cut-offs, daily limits and audit trails are unambiguous across time zones. | ✅ |
+| S7 | **Account number format is also checked in the database**: `CHECK (account_number ~ '^[0-9]{10}$')` | 🟡 |
+
+### Why not the alternatives?
+
+| Rejected | Problem |
+|---|---|
+| Auto-increment IDs | `/accounts/42` invites guessing other IDs (IDOR attacks) and leaks business volume |
+| UUID v4 | Random order scatters inserts across the index, so writes slow down at scale |
+| NUBAN as the primary key | Business identifiers can change (re-numbering, migrations); keys must never change |
+| One `transactions` table (from, to, amount) | Can't represent 3+ legs (the fee) or internal accounts cleanly |
+| Soft delete / updatable ledger | A ledger you can edit can't be trusted or audited |
+| App-code-only immutability | One bug or one manual SQL session can rewrite history; the database is the last line of defence |
+
+### Ledger accounts (the chart of accounts)
+
+Not every ledger account belongs to a customer, e.g. **Fee income** and **Settlement**. So the Ledger keeps its own `ledger_accounts` table:
+
+| Column | Notes |
+|---|---|
+| `id` | UUID v7 |
+| `account_id` | Links to `accounts.id` for customer accounts; `NULL` for internal accounts |
+| `code` | e.g. `FEE_INCOME`, `SETTLEMENT_NGN`, for internal accounts |
+| `type` | `ASSET` · `LIABILITY` · `REVENUE` · `EXPENSE` · `EQUITY` |
+| `currency` | ISO-4217, e.g. `NGN` |
+| `balance` | `BIGINT` minor units: the cached balance, updated in the same transaction as the lines |
+
+### Entity overview
+
+```mermaid
+erDiagram
+    customers ||--o{ accounts : owns
+    customers ||--o| credentials : "logs in with"
+    customers ||--o{ kyc_verifications : submits
+    accounts ||--|| ledger_accounts : "money held in"
+    journal_entries ||--|{ ledger_lines : "has 2+"
+    ledger_accounts ||--o{ ledger_lines : "posted to"
+    transfers ||--|| journal_entries : "recorded as"
+```
+
+### Ledger line rules
+
+- `amount` is a **positive** `BIGINT` (`CHECK (amount > 0)`) with a separate `direction`: `DEBIT` or `CREDIT`
+- Each line carries a `currency`, and every line in one entry uses the **same** currency
+- **Σ debits = Σ credits** per journal entry, checked in `LedgerService` before commit
+
+---
+
+## 9. 🧱 Stack & Rationale
 
 | Layer | Choice | Status |
 |---|---|:---:|
@@ -303,7 +363,7 @@ flowchart TD
 
 ---
 
-## 9. ❓ Open Questions
+## 10. ❓ Open Questions
 
 | # | Question | Notes |
 |:---:|---|---|

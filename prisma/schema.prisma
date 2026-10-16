@@ -1,8 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -10,4 +8,52 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum CustomerStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum AccountType {
+  SAVINGS
+  CURRENT
+}
+
+model Customer {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  email     String?        @unique
+  phone     String?        @unique
+  firstName String         @map("first_name")
+  lastName  String         @map("last_name")
+  status    CustomerStatus @default(PENDING_VERIFICATION)
+  kycTier   Int            @default(0) @map("kyc_tier")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  accounts  Account[]
+
+  @@map("customers")
+}
+
+model Account {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  customerId    String      @map("customer_id") @db.Uuid
+  accountNumber String      @unique @map("account_number") @db.Char(10)
+  currency      String      @default("NGN") @db.Char(3)
+  type          AccountType
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  closedAt      DateTime?   @map("closed_at") @db.Timestamptz(3)
+  customer      Customer    @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@map("accounts")
 }
