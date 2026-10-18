@@ -6,6 +6,8 @@ import { AuthController } from './auth.controller.js';
 import { PrismaModule } from '../../infrastructure/prisma/prisma.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 
+import { AuthGuard } from './guards/auth.guard.js';
+
 @Module({
   imports: [
     PrismaModule,
@@ -20,7 +22,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService],
-  exports: [AuthService],
+  providers: [AuthService, AuthGuard],
+  exports: [AuthService, AuthGuard, JwtModule],
 })
 export class AuthModule {}

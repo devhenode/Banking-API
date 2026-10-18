@@ -1,9 +1,15 @@
 import { Module } from '@nestjs/common';
-import { AccountsService } from './accounts.service.js';
 import { AccountsController } from './accounts.controller.js';
+import { AccountsService } from './accounts.service.js';
+import { NubanService } from './nuban.service.js';
+import { PrismaModule } from '../../infrastructure/prisma/prisma.module.js';
+import { LedgerModule } from '../ledger/ledger.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
-  controllers: [AccountsController], // front desk: HTTP routes
-  providers: [AccountsService],      // back office: business logic
+  imports: [PrismaModule, LedgerModule, AuthModule],
+  controllers: [AccountsController],
+  providers: [AccountsService, NubanService],
+  exports: [AccountsService],
 })
 export class AccountsModule {}
