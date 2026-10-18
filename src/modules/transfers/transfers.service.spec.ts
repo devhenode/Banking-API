@@ -22,6 +22,7 @@ describe('TransfersService', () => {
     let mockAccountsService: any;
     let mockLedgerService: any;
     let mockIdempotencyService: any;
+    let mockKycService: any;
 
     beforeEach(() => {
         mockPrisma = {
@@ -50,11 +51,16 @@ describe('TransfersService', () => {
             recordCompleted: vi.fn().mockResolvedValue({}),
         };
 
+        mockKycService = {
+            checkTransferLimit: vi.fn().mockResolvedValue(undefined),
+        };
+
         service = new TransfersService(
             mockPrisma as unknown as PrismaService,
             mockAccountsService as unknown as AccountsService,
             mockLedgerService as unknown as LedgerService,
             mockIdempotencyService as unknown as IdempotencyService,
+            mockKycService as any,
         );
     });
 
@@ -244,6 +250,23 @@ describe('TransfersService', () => {
             expect(mockAccountsService.getAccountByNumber).toHaveBeenCalledWith('0123456789');
             expect(result.status).toBe(TransferStatus.COMPLETED);
             expect(result.amount).toBe('2500');
+        });
+
+        it('throws if KycService.checkTransferLimit rejects with daily limit exceeded', async () => {
+            mockAccountsService.getAccountById
+                .mockResolvedValueOnce({ id: 'src-1', status: AccountStatus.ACTIVE, currency: 'NGN' })
+                .mockResolvedValueOnce({ id: 'dest-1', status: AccountStatus.ACTIVE, currency: 'NGN' });
+            mockKycService.checkTransferLimit.mockRejectedValueOnce(
+                new BadRequestException('Daily transfer limit exceeded'),
+            );
+
+            await expect(
+                service.transfer('cust-1', 'key-1', {
+                    sourceAccountId: 'src-1',
+                    destinationAccountId: 'dest-1',
+                    amount: '100000000',
+                }),
+            ).rejects.toThrow(BadRequestException);
         });
 
         it('executes atomic transfer debiting source and crediting destination', async () => {

@@ -3,6 +3,7 @@ import { PrismaModule } from '../../infrastructure/prisma/prisma.module.js';
 import { IdempotencyModule } from '../../common/idempotency/idempotency.module.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { KycModule } from '../kyc/kyc.module.js';
 import { LedgerModule } from '../ledger/ledger.module.js';
 import { TransfersController } from './transfers.controller.js';
 import { TransfersService } from './transfers.service.js';
@@ -14,6 +15,7 @@ import { TransfersService } from './transfers.service.js';
         LedgerModule,
         AuthModule,
         IdempotencyModule,
+        KycModule,
     ],
     controllers: [TransfersController],
     providers: [TransfersService],

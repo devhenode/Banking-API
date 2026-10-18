@@ -14,6 +14,7 @@ import {
 import { PrismaService } from '../../infrastructure/prisma/prisma.service.js';
 import { IdempotencyService } from '../../common/idempotency/idempotency.service.js';
 import { AccountsService } from '../accounts/accounts.service.js';
+import { KycService } from '../kyc/kyc.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { CreateTransferDto } from './dto/create-transfer.dto.js';
 import { DepositDto } from './dto/deposit.dto.js';
@@ -25,6 +26,7 @@ export class TransfersService {
         private readonly accountsService: AccountsService,
         private readonly ledgerService: LedgerService,
         private readonly idempotencyService: IdempotencyService,
+        private readonly kycService: KycService,
     ) { }
 
     /**
@@ -189,6 +191,10 @@ export class TransfersService {
         }
 
         const amountBigInt = BigInt(dto.amount);
+
+        // Enforce daily KYC spending limits (ADR-12: policy at the top)
+        await this.kycService.checkTransferLimit(customerId, amountBigInt);
+
         const sourceLedger = await this.ledgerService.getLedgerAccountByAccountId(sourceAccount.id);
         const destLedger = await this.ledgerService.getLedgerAccountByAccountId(destinationAccount.id);
 
