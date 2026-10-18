@@ -66,20 +66,34 @@ enum TransferStatus {
   REVERSED
 }
 
+enum KycDocumentType {
+  NIN
+  BVN
+  PROOF_OF_ADDRESS
+  LIVENESS
+}
+
+enum KycVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
 model Customer {
-  id              String           @id @default(uuid(7)) @db.Uuid
-  email           String?          @unique
-  phone           String?          @unique
-  firstName       String           @map("first_name")
-  lastName        String           @map("last_name")
-  status          CustomerStatus   @default(PENDING_VERIFICATION)
-  kycTier         Int              @default(0) @map("kyc_tier")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
-  accounts        Account[]
-  credential      Credential?
-  otpCodes        OtpCode[]
-  idempotencyKeys IdempotencyKey[]
+  id               String            @id @default(uuid(7)) @db.Uuid
+  email            String?           @unique
+  phone            String?           @unique
+  firstName        String            @map("first_name")
+  lastName         String            @map("last_name")
+  status           CustomerStatus    @default(PENDING_VERIFICATION)
+  kycTier          Int               @default(0) @map("kyc_tier")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  accounts         Account[]
+  credential       Credential?
+  otpCodes         OtpCode[]
+  idempotencyKeys  IdempotencyKey[]
+  kycVerifications KycVerification[]
 
   @@map("customers")
 }
@@ -217,4 +231,22 @@ model Transfer {
   @@index([sourceAccountId])
   @@index([destinationAccountId])
   @@map("transfers")
+}
+
+model KycVerification {
+  id             String                @id @default(uuid(7)) @db.Uuid
+  customerId     String                @map("customer_id") @db.Uuid
+  tier           Int
+  documentType   KycDocumentType       @map("document_type")
+  documentNumber String?               @map("document_number")
+  status         KycVerificationStatus @default(VERIFIED)
+  metadata       Json?
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@index([documentType, documentNumber])
+  @@map("kyc_verifications")
 }
