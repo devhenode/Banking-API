@@ -113,6 +113,21 @@ export class AccountsService {
   }
 
   /**
+   * Retrieves an account by its 10-digit NUBAN number.
+   */
+  async getAccountByNumber(accountNumber: string) {
+    const account = await this.prisma.account.findUnique({
+      where: { accountNumber },
+    });
+
+    if (!account) {
+      throw new NotFoundException(`Account with number ${accountNumber} not found.`);
+    }
+
+    return account;
+  }
+
+  /**
    * Reads account balance via LedgerService (ADR-13 & ADR-10).
    */
   async getAccountBalance(accountId: string, customerId?: string) {
