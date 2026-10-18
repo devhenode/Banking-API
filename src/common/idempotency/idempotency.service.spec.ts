@@ -96,10 +96,11 @@ describe('IdempotencyService', () => {
         expect(result.responseBody).toEqual(cachedBody);
     });
 
-    it('recordInProgress calls tx.idempotencyKey.upsert', async () => {
+    it('recordInProgress creates record when none exists', async () => {
         const mockTx = {
             idempotencyKey: {
-                upsert: vi.fn().mockResolvedValue({}),
+                findUnique: vi.fn().mockResolvedValue(null),
+                create: vi.fn().mockResolvedValue({}),
             },
         };
 
@@ -109,10 +110,12 @@ describe('IdempotencyService', () => {
             requestHash: 'hash-1',
         });
 
-        expect(mockTx.idempotencyKey.upsert).toHaveBeenCalledWith(
+        expect(mockTx.idempotencyKey.findUnique).toHaveBeenCalledWith({
+            where: { customerId_key: { customerId: 'cust-1', key: 'key-1' } },
+        });
+        expect(mockTx.idempotencyKey.create).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { customerId_key: { customerId: 'cust-1', key: 'key-1' } },
-                create: expect.objectContaining({
+                data: expect.objectContaining({
                     customerId: 'cust-1',
                     key: 'key-1',
                     status: IdempotencyStatus.IN_PROGRESS,

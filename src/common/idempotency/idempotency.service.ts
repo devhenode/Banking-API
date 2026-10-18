@@ -98,28 +98,73 @@ export class IdempotencyService {
         const ttlSeconds = data.ttlSeconds ?? 86400; // 24 hours
         const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-        return tx.idempotencyKey.upsert({
+        // 1. Check if a record already exists within this transaction
+        const existing = await tx.idempotencyKey.findUnique({
             where: {
                 customerId_key: {
                     customerId: data.customerId,
                     key: data.key,
                 },
             },
-            create: {
-                customerId: data.customerId,
-                key: data.key,
-                requestHash: data.requestHash,
-                status: IdempotencyStatus.IN_PROGRESS,
-                expiresAt,
-            },
-            update: {
-                requestHash: data.requestHash,
-                status: IdempotencyStatus.IN_PROGRESS,
-                responseCode: null,
-                responseBody: Prisma.DbNull,
-                expiresAt,
-            },
         });
+
+        if (existing) {
+            const isExpired = existing.expiresAt.getTime() <= Date.now();
+            if (!isExpired) {
+                if (existing.status === IdempotencyStatus.IN_PROGRESS) {
+                    throw new ConflictException(
+                        'A request with this idempotency key is currently in progress. Please retry shortly.',
+                    );
+                }
+                if (existing.status === IdempotencyStatus.COMPLETED) {
+                    if (existing.requestHash !== data.requestHash) {
+                        throw new UnprocessableEntityException(
+                            'Idempotency key has already been used with a different request payload.',
+                        );
+                    }
+                    throw new ConflictException(
+                        'A request with this idempotency key has already been completed.',
+                    );
+                }
+            }
+
+            // Expired key: recycle and set back to IN_PROGRESS
+            return tx.idempotencyKey.update({
+                where: {
+                    customerId_key: {
+                        customerId: data.customerId,
+                        key: data.key,
+                    },
+                },
+                data: {
+                    requestHash: data.requestHash,
+                    status: IdempotencyStatus.IN_PROGRESS,
+                    responseCode: null,
+                    responseBody: Prisma.DbNull,
+                    expiresAt,
+                },
+            });
+        }
+
+        // 2. Insert new IN_PROGRESS row; catch unique constraint collision under race condition (P2002)
+        try {
+            return await tx.idempotencyKey.create({
+                data: {
+                    customerId: data.customerId,
+                    key: data.key,
+                    requestHash: data.requestHash,
+                    status: IdempotencyStatus.IN_PROGRESS,
+                    expiresAt,
+                },
+            });
+        } catch (err: any) {
+            if (err?.code === 'P2002') {
+                throw new ConflictException(
+                    'A request with this idempotency key is currently in progress. Please retry shortly.',
+                );
+            }
+            throw err;
+        }
     }
 
     /**

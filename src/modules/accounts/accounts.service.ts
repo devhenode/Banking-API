@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AccountStatus, CustomerStatus } from '../../generated/prisma/enums.js';
+import { AccountStatus, AccountType, CustomerStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
@@ -67,7 +67,7 @@ export class AccountsService {
         data: {
           customerId: customer.id,
           accountNumber,
-          type: dto.type,
+          type: dto.type ?? AccountType.SAVINGS,
           currency,
           status: AccountStatus.ACTIVE,
         },
