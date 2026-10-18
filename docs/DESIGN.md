@@ -38,9 +38,34 @@ A commercial banking API where customers **sign up with email or phone**, **veri
 
 Each tier carries a **daily transfer limit**.
 
+#### KYC tier progression & limits flow
+
+```mermaid
+flowchart LR
+    Start(["New Customer"]) --> T1["Tier 1: Basic<br/>• Submit NIN<br/>• Limit: ₦50,000/day"]
+    T1 --> T2["Tier 2: Intermediate<br/>• Submit BVN<br/>• Proof of Address<br/>• Limit: ₦200,000/day"]
+    T2 --> T3["Tier 3: Advanced<br/>• Biometric Liveness Check<br/>• Limit: ₦5,000,000/day"]
+```
+
 ### Account numbers
 
 Accounts use the **10-digit NUBAN** format (9-digit serial + 1 check digit computed with the bank code), the Central Bank of Nigeria standard. Uniqueness is enforced by a database `UNIQUE` constraint.
+
+#### NUBAN generation & CBN check digit algorithm
+
+```mermaid
+flowchart TD
+    A["Generate 9-digit Account Serial Number"] --> B["Prepend 3-digit CBN Bank Code: 999"]
+    B --> C["12-digit Sequence: Bank Code (3) + Serial (9)"]
+    C --> D["Multiply each digit by CBN Weight Vector:<br/>[3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3]"]
+    D --> E["Calculate Sum of all 12 Products"]
+    E --> F["Compute Remainder: S = Sum mod 10"]
+    F --> G["Compute Check Digit = (10 - S) mod 10"]
+    G --> H["10-digit NUBAN = Serial (9 digits) + Check Digit (1 digit)"]
+    H --> I{"Database UNIQUE Check"}
+    I -- Collision (Duplicate) --> A
+    I -- Unique --> J["Persist Account with NUBAN"]
+```
 
 ---
 
@@ -56,6 +81,16 @@ Accounts use the **10-digit NUBAN** format (9-digit serial + 1 check digit compu
 **Why not floats?** `0.1 + 0.2 === 0.30000000000000004`. Floating-point numbers can't represent most decimals exactly. Rounding only hides the error on screen while the stored value stays wrong.
 
 **Why store the currency?** Currencies have different minor units: NGN and USD have 2 decimals, JPY has 0, KWD has 3.
+
+### Money representation flow
+
+```mermaid
+flowchart LR
+    A["User Input: ₦150.75"] --> B["Convert to Minor Units: 15075 kobo"]
+    B --> C["In-Memory: JavaScript BigInt (15075n)"]
+    C --> D["Database: Postgres BIGINT (15075)"]
+    D --> E["API JSON Response: String ('15075')"]
+```
 
 ---
 
@@ -90,6 +125,49 @@ One journal entry, three lines:
 | 2 | Customer B | | ₦5,000 |
 | 3 | Fee income | | ₦10 |
 | | **Total** | **₦5,010** | **₦5,010** ✅ |
+
+### Double-entry structure & account legs
+
+A single economic event produces one journal entry composed of balanced debit and credit legs across distinct chart-of-accounts entries:
+
+```mermaid
+flowchart TD
+    subgraph JE["Journal Entry: Transfer ₦5,000 with ₦10 Fee"]
+        L1["Leg 1: DEBIT ₦5,010"]
+        L2["Leg 2: CREDIT ₦5,000"]
+        L3["Leg 3: CREDIT ₦10"]
+    end
+
+    subgraph LA["Ledger Accounts (Chart of Accounts)"]
+        ACC_A["Customer A (Liability)<br/>Balance: ₦10,000 ➔ ₦4,990 (-₦5,010)"]
+        ACC_B["Customer B (Liability)<br/>Balance: ₦2,000 ➔ ₦7,000 (+₦5,000)"]
+        ACC_FEE["Fee Income (Revenue)<br/>Balance: ₦500 ➔ ₦510 (+₦10)"]
+    end
+
+    L1 --> ACC_A
+    L2 --> ACC_B
+    L3 --> ACC_FEE
+```
+
+### Posting validation & execution flow
+
+Every posting executed by `LedgerService.post()` enforces double-entry invariants, acquires row locks in sorted order, and rejects any overdraft before committing:
+
+```mermaid
+flowchart TD
+    A["Incoming Posting Request"] --> B{"Lines >= 2 & Amounts > 0?"}
+    B -- No --> B1["400 Bad Request"]
+    B -- Yes --> C{"Sum Debits == Sum Credits?"}
+    C -- No --> C1["400 Unbalanced Entry"]
+    C -- Yes --> D["Sort Account IDs in ASC Order"]
+    D --> E["Acquire Row Locks: SELECT ... FOR UPDATE"]
+    E --> F["Calculate New Balances"]
+    F --> G{"Customer Balance < 0?"}
+    G -- Yes --> G1["400 Insufficient Funds"]
+    G -- No --> H["INSERT journal_entries & ledger_lines"]
+    H --> I["UPDATE ledger_accounts cached balance"]
+    I --> J["Commit Transaction & Return Entry"]
+```
 
 ---
 
@@ -129,6 +207,28 @@ Idempotency-Key: 6f1c2a9e-4b7d-4e3a-9a1f-2c8d5e7b0f13
 > ⚠️ **Order matters:** the `IN_PROGRESS` row is inserted **before** any money moves. The unique constraint on (`customer_id`, `key`) makes the database reject a second concurrent insert, which is how the 409 case is detected.
 
 The idempotency record is written **in the same transaction** as the transfer. If the transfer rolls back, so does the record, and the client can safely retry.
+
+### Idempotency decision tree & lifecycle
+
+The `idempotency_keys` table acts as a gatekeeper for all money-moving requests, differentiating new requests, network retries, and concurrent duplicates:
+
+```mermaid
+flowchart TD
+    Req["Incoming POST /transfers<br/>Header: Idempotency-Key"] --> Hash["Compute SHA-256 Request Hash<br/>(Method + Path + Body)"]
+    Hash --> Lookup{"Lookup (customer_id, key)"}
+
+    Lookup -- "Not Found or Expired (>24h)" --> InsertProg["INSERT idempotency_keys<br/>(status: IN_PROGRESS)"]
+    InsertProg --> Exec["Execute Transfer Transaction"]
+    Exec -- Success --> MarkComp["UPDATE idempotency_keys<br/>(status: COMPLETED, response_body)"]
+    MarkComp --> RetSuccess["201 Created (Transfer Details)"]
+    Exec -- Failure --> Rollback["ROLLBACK Transaction<br/>(Idempotency row dropped, safe to retry)"]
+
+    Lookup -- "Found & Status == IN_PROGRESS" --> Conflict["409 Conflict<br/>(Transfer in progress, please retry)"]
+
+    Lookup -- "Found & Status == COMPLETED" --> CheckHash{"Stored Hash == Request Hash?"}
+    CheckHash -- Yes --> Replay["Replay Cached Response<br/>(201 Created / Saved Body)"]
+    CheckHash -- No --> Unproc["422 Unprocessable Entity<br/>(Idempotency key reused with different body)"]
+```
 
 ### Rejected alternatives
 
@@ -203,6 +303,31 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A. If each transaction locks
 
 > Prisma's query API can't express `FOR UPDATE`, so locking uses `$queryRaw` inside `prisma.$transaction(async (tx) => …)`.
 
+#### Deadlock prevention flow
+
+By sorting all affected ledger account IDs in ascending order (`ORDER BY id ASC`), competing concurrent transactions always acquire locks in the identical order, eliminating circular wait:
+
+```mermaid
+flowchart TD
+    subgraph WithoutSorting["❌ Unsorted Lock Acquisition (Deadlock Risk)"]
+        direction TB
+        Tx1["Tx 1 (A ➔ B)<br/>Locks A first"] -->|Waits for B| Deadlock(["💀 Deadlock (40P01)<br/>Circular wait detected"])
+        Tx2["Tx 2 (B ➔ A)<br/>Locks B first"] -->|Waits for A| Deadlock
+    end
+
+    subgraph WithSorting["✅ Sorted Lock Acquisition (Deadlock-Free)"]
+        direction TB
+        Sort["Sort IDs: [min(A, B), max(A, B)]"]
+        STx1["Tx 1 (A ➔ B)<br/>Locks min(A, B) first"]
+        STx2["Tx 2 (B ➔ A)<br/>Locks min(A, B) first"]
+        Sort --> STx1
+        Sort --> STx2
+        STx1 -->|Acquires lock| Progress["Tx 1 finishes & releases locks"]
+        STx2 -.->|Waits in queue| STx1
+        Progress --> STx2Next["Tx 2 acquires locks & proceeds"]
+    end
+```
+
 ---
 
 ## 6. 📦 Phase 1 Scope
@@ -256,6 +381,40 @@ A sends ₦5,000 to B **while** B sends ₦3,000 to A. If each transaction locks
 
 `AppModule` only **composes** modules. It never registers domain controllers or services itself.
 
+### Authentication & Registration Flow
+
+The registration and login lifecycle enforces password security (bcrypt), temporary OTP verification with attempt lockouts, and signed JWT issuance:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Prospective Customer
+    participant Auth as AuthService
+    participant DB as Postgres (customers, credentials, otp_codes)
+    participant Notif as NotificationsService (Console Sender)
+
+    User->>Auth: POST /auth/register (name, email/phone, password)
+    Auth->>DB: Check uniqueness (email/phone)
+    Auth->>Auth: Hash password (bcrypt) & generate 6-digit OTP (SHA-256)
+    Note over Auth,DB: Single Transaction ($transaction)
+    Auth->>DB: INSERT customer (PENDING_VERIFICATION)
+    Auth->>DB: INSERT credential (password_hash)
+    Auth->>DB: INSERT otp_code (code_hash, expires_at +10m)
+    Auth->>Notif: sendOtp(recipient, rawOtp, REGISTRATION)
+    Notif-->>User: Console log OTP
+    Auth-->>User: 201 Created { customerId, message }
+
+    User->>Auth: POST /auth/verify-otp (customerId, otpCode)
+    Auth->>DB: Verify code, expiration & attempt count (<5)
+    Auth->>DB: UPDATE otp_codes (used_at) & customer (status=ACTIVE)
+    Auth-->>User: 200 OK { message: "Account active" }
+
+    User->>Auth: POST /auth/login (identifier, password)
+    Auth->>DB: Read customer & credentials (status must be ACTIVE)
+    Auth->>Auth: Verify bcrypt hash & sign JWT
+    Auth-->>User: 200 OK { accessToken, customer }
+```
+
 ### One transaction across modules
 
 A transfer must save the idempotency record, the transfer row and the ledger postings **atomically**, but those tables have different owners. The orchestrating service opens **one** transaction and **passes the transaction client** (`tx`) into each owner's service:
@@ -270,9 +429,107 @@ await prisma.$transaction(async (tx) => {
 
 Each service still writes only its own tables, but all writes commit or roll back together. Events or message brokers are **not** used for this: they can't provide atomicity and would replace a guarantee with eventual consistency.
 
+#### Transfer orchestration flow
+
+`TransfersModule` coordinates idempotency, validation, and ledger updates across module boundaries within a single atomic database transaction:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Customer Client
+    participant Ctrl as TransfersController
+    participant Svc as TransfersService
+    participant Acc as AccountsService
+    participant Kyc as KycService
+    participant Idemp as IdempotencyService
+    participant Ledg as LedgerService
+    participant DB as Postgres
+
+    Client->>Ctrl: POST /transfers (Idempotency-Key, fromAcc, toAcc, amount)
+    Ctrl->>Svc: initiateTransfer(customerId, dto)
+    
+    Svc->>Acc: verifyAccountOwnership(customerId, fromAcc)
+    Acc-->>Svc: Source Account Active & Verified
+    Svc->>Acc: verifyAccountActive(toAcc)
+    Acc-->>Svc: Destination Account Active
+    
+    Svc->>Kyc: checkTransferLimit(customerId, amount)
+    Kyc-->>Svc: Limit Check Passed
+    
+    rect rgb(235, 245, 255)
+        Note over Svc,DB: Atomic Database Transaction ($transaction)
+        Svc->>Idemp: recordInProgress(tx, key, requestHash)
+        Svc->>DB: INSERT transfers (PENDING)
+        Svc->>Ledg: post(tx, { debit: fromAcc, credit: toAcc, amount })
+        Ledg->>DB: Sorted Row Locks + Insert Journal & Lines + Update Balances
+        Svc->>DB: UPDATE transfers (status: COMPLETED)
+        Svc->>Idemp: recordCompleted(tx, key, responsePayload)
+    end
+    
+    Svc-->>Client: 201 Created { transferId, status: "COMPLETED", amount }
+```
+
+### Account Opening & Ledger Linkage Flow
+
+When an active customer opens a bank account, `AccountsService` and `LedgerService` coordinate atomically across the module boundary within a single transaction without violating table ownership:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as Active Customer
+    participant Guard as AuthGuard
+    participant Ctrl as AccountsController
+    participant Svc as AccountsService
+    participant Nuban as NubanService
+    participant AccDB as Postgres (accounts)
+    participant Ledger as LedgerService
+    participant LedgDB as Postgres (ledger_accounts)
+
+    Customer->>Guard: POST /accounts (Bearer JWT + type: SAVINGS)
+    Guard->>Guard: Verify JWT & extract customerId (user.sub)
+    Guard->>Ctrl: Pass authenticated request
+    Ctrl->>Svc: createAccount(customerId, dto)
+    Svc->>Nuban: generate() [9-digit serial + CBN check digit]
+    Nuban-->>Svc: 10-digit NUBAN
+    
+    rect rgb(235, 245, 255)
+        Note over Svc,LedgDB: Atomic Transaction ($transaction)
+        Svc->>AccDB: INSERT account (accountNumber, customerId, type, status=ACTIVE)
+        Svc->>Ledger: createCustomerAccount(tx, { accountId, currency })
+        Ledger->>LedgDB: INSERT ledger_accounts (accountId, type=LIABILITY, balance=0)
+    end
+    
+    Svc-->>Customer: 201 Created { id, accountNumber, status: "ACTIVE" }
+```
+
 ### Reads go through the owner too
 
 Balance and transaction history are served by `AccountsController`. `AccountsService` calls `LedgerService.getBalance()` and `LedgerService.getHistory()`; it never queries ledger tables. This keeps the Ledger free to change its schema, and extractable as a service in Phase 7.
+
+#### Read path encapsulation flow
+
+Balance and transaction inquiries always query through the owning service boundary, preserving domain encapsulation:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as Authenticated Customer
+    participant Guard as AuthGuard
+    participant Ctrl as AccountsController
+    participant AccSvc as AccountsService
+    participant LedgSvc as LedgerService
+    participant DB as Postgres (ledger_accounts)
+
+    Customer->>Guard: GET /accounts/:id/balance (Bearer JWT)
+    Guard->>Ctrl: Pass Authenticated Request (user.sub)
+    Ctrl->>AccSvc: getBalance(accountId, customerId)
+    AccSvc->>AccSvc: Verify Customer Owns Account
+    AccSvc->>LedgSvc: getAccountBalance(accountId)
+    LedgSvc->>DB: SELECT balance, currency FROM ledger_accounts WHERE account_id = :id
+    DB-->>LedgSvc: Row { balance: 1507500n, currency: "NGN" }
+    LedgSvc-->>AccSvc: { balance: "1507500", currency: "NGN" }
+    AccSvc-->>Customer: 200 OK { accountId, balance: "1507500", currency: "NGN" }
+```
 
 ### Dependency direction
 
@@ -357,6 +614,21 @@ The `accounts` table therefore has **no balance column**.
 ### Immutability
 
 Ledger tables are **append-only, enforced in Postgres**: a trigger rejects any `UPDATE` or `DELETE` on `journal_entries` and `ledger_lines`. Application code never edits them either, but the database is the last line of defence against bugs, scripts and manual SQL sessions. Corrections are new **reversal** entries.
+
+#### Append-only trigger enforcement
+
+PostgreSQL triggers enforce write-once immutability directly at the database engine level, rejecting unauthorized mutations even if attempted via raw SQL:
+
+```mermaid
+flowchart TD
+    A["SQL Statement on journal_entries or ledger_lines"] --> B{"Operation Type?"}
+    B -- "INSERT" --> C["Execute Insert<br/>• Append new audit row<br/>• Preserved permanently"]
+    B -- "UPDATE" --> D["Trigger: trg_prevent_ledger_mutation<br/>BEFORE UPDATE"]
+    B -- "DELETE" --> E["Trigger: trg_prevent_ledger_mutation<br/>BEFORE DELETE"]
+    D --> F["RAISE EXCEPTION<br/>'Ledger entries and lines are append-only'"]
+    E --> F
+    F --> G["Transaction ABORT / ROLLBACK ❌"]
+```
 
 ### Secrets & OTPs
 
