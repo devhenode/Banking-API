@@ -54,20 +54,32 @@ enum OtpPurpose {
   LOGIN
 }
 
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum TransferStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
 
 model Customer {
-  id         String         @id @default(uuid(7)) @db.Uuid
-  email      String?        @unique
-  phone      String?        @unique
-  firstName  String         @map("first_name")
-  lastName   String         @map("last_name")
-  status     CustomerStatus @default(PENDING_VERIFICATION)
-  kycTier    Int            @default(0) @map("kyc_tier")
-  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
-  accounts   Account[]
-  credential Credential?
-  otpCodes   OtpCode[]     
+  id              String           @id @default(uuid(7)) @db.Uuid
+  email           String?          @unique
+  phone           String?          @unique
+  firstName       String           @map("first_name")
+  lastName        String           @map("last_name")
+  status          CustomerStatus   @default(PENDING_VERIFICATION)
+  kycTier         Int              @default(0) @map("kyc_tier")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  accounts        Account[]
+  credential      Credential?
+  otpCodes        OtpCode[]
+  idempotencyKeys IdempotencyKey[]
 
   @@map("customers")
 }
@@ -84,7 +96,9 @@ model Account {
   customer      Customer      @relation(fields: [customerId], references: [id])
   status        AccountStatus @default(ACTIVE)
 
-  ledgerAccount LedgerAccount?
+  ledgerAccount     LedgerAccount?
+  outgoingTransfers Transfer[]     @relation("OutgoingTransfers")
+  incomingTransfers Transfer[]     @relation("IncomingTransfers")
 
   @@index([customerId])
   @@map("accounts")
@@ -116,6 +130,7 @@ model JournalEntry {
   lines      LedgerLine[]
   reverses   JournalEntry? @relation("Reversal", fields: [reversesId], references: [id], onDelete: Restrict)
   reversedBy JournalEntry? @relation("Reversal")
+  transfer   Transfer?
 
   @@map("journal_entries")
 }
@@ -150,18 +165,56 @@ model Credential {
 }
 
 model OtpCode {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  customerId String    @map("customer_id") @db.Uuid
-  codeHash   String    @map("code_hash")
+  id         String     @id @default(uuid(7)) @db.Uuid
+  customerId String     @map("customer_id") @db.Uuid
+  codeHash   String     @map("code_hash")
   purpose    OtpPurpose
-  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
-  attempts   Int       @default(0)
-  usedAt     DateTime? @map("used_at") @db.Timestamptz(3)
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt  DateTime   @map("expires_at") @db.Timestamptz(3)
+  attempts   Int        @default(0)
+  usedAt     DateTime?  @map("used_at") @db.Timestamptz(3)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
 
   customer Customer @relation(fields: [customerId], references: [id])
 
-  @@map("otp_codes")
-
   @@index([customerId])
+  @@map("otp_codes")
+}
+
+model IdempotencyKey {
+  id           String            @id @default(uuid(7)) @db.Uuid
+  key          String
+  customerId   String            @map("customer_id") @db.Uuid
+  requestHash  String            @map("request_hash")
+  status       IdempotencyStatus @default(IN_PROGRESS)
+  responseCode Int?              @map("response_code")
+  responseBody Json?             @map("response_body")
+  expiresAt    DateTime          @map("expires_at") @db.Timestamptz(3)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([customerId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+model Transfer {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  sourceAccountId      String?        @map("source_account_id") @db.Uuid
+  destinationAccountId String         @map("destination_account_id") @db.Uuid
+  amount               BigInt
+  currency             String         @db.Char(3)
+  status               TransferStatus @default(PENDING)
+  journalEntryId       String?        @unique @map("journal_entry_id") @db.Uuid
+  description          String?
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sourceAccount      Account?      @relation("OutgoingTransfers", fields: [sourceAccountId], references: [id], onDelete: Restrict)
+  destinationAccount Account       @relation("IncomingTransfers", fields: [destinationAccountId], references: [id], onDelete: Restrict)
+  journalEntry       JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+
+  @@index([sourceAccountId])
+  @@index([destinationAccountId])
+  @@map("transfers")
 }
