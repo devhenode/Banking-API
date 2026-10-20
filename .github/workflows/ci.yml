@@ -1,0 +1,70 @@
+name: Banking API CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Verify Invariants & Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: banking_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Gate 1 - Oxlint Code Quality & Type-Aware Linter
+        run: npm run lint
+
+      - name: Gate 2 - Production TypeScript Compilation
+        run: npm run build
+
+      - name: Gate 3 - Database Migrations & Invariant Check
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/banking_db?schema=public
+        run: npx prisma migrate deploy
+
+      - name: Gate 4 - Unit Test Suite
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/banking_db?schema=public
+          JWT_SECRET: github_actions_ci_jwt_secret_key_32_characters_long
+        run: npm test
+
+      - name: Gate 5 - End-to-End & Concurrency Stress Tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/banking_db?schema=public
+          JWT_SECRET: github_actions_ci_jwt_secret_key_32_characters_long
+        run: npm run test:e2e
+
+      - name: Gate 6 - Production Container Build Verification
+        run: docker build -t banking-api:ci .

@@ -23,6 +23,15 @@ describe('AppController (e2e)', () => {
       .expect('Hello World!');
   });
 
+  it('/health (GET)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/health')
+      .expect(200);
+
+    expect(res.body).toHaveProperty('status', 'ok');
+    expect(res.body).toHaveProperty('timestamp');
+  });
+
   afterEach(async () => {
     await app.close();
   });

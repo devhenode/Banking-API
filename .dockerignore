@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.github
+.agents
+.claude
+.cursor
+.devin
+.windsurf
+claude-former
+coverage
+*.tsbuildinfo
+.DS_Store
+.env
+docs
+Banking_API.postman_collection.json
+Banking_API.postman_environment.json

@@ -1,0 +1,775 @@
+{
+	"info": {
+		"_postman_id": "c1f7a49e-1082-4ef8-a53f-7e9b384f5012",
+		"name": "Banking API - Core Monolith",
+		"description": "Production-grade, fully testable Postman Collection for the Banking API monolith built with NestJS, Prisma 7, and PostgreSQL.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01-Auth",
+			"item": [
+				{
+					"name": "Register Customer",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.customerId) {",
+									"    pm.environment.set(\"customer_id\", jsonData.customerId);",
+									"    console.log(\"Saved customer_id:\", jsonData.customerId);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"firstName\": \"Ngozi\",\n    \"lastName\": \"Eze\",\n    \"email\": \"ngozi.eze{{$randomInt}}@example.com\",\n    \"phone\": \"+234803{{$randomInt}}\",\n    \"password\": \"SecurePass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/register",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"register"
+							]
+						},
+						"description": "Registers a new customer profile, hashes password with bcrypt (12 rounds), and sends a 6-digit verification OTP."
+					},
+					"response": []
+				},
+				{
+					"name": "Verify OTP",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.accessToken) {",
+									"    pm.environment.set(\"jwt_token\", jsonData.accessToken);",
+									"    console.log(\"Saved jwt_token\");",
+									"}",
+									"if (jsonData.customer && jsonData.customer.id) {",
+									"    pm.environment.set(\"customer_id\", jsonData.customer.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"ngozi.eze@example.com\",\n    \"otp\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/verify-otp",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"verify-otp"
+							]
+						},
+						"description": "Verifies customer OTP against SHA-256 hash. Sets customer status to ACTIVE and returns JWT access token."
+					},
+					"response": []
+				},
+				{
+					"name": "Login Customer",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.accessToken) {",
+									"    pm.environment.set(\"jwt_token\", jsonData.accessToken);",
+									"    console.log(\"Saved jwt_token\");",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"identifier\": \"ngozi.eze@example.com\",\n    \"password\": \"SecurePass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"login"
+							]
+						},
+						"description": "Authenticates customer via email or phone + password. Returns JWT access token."
+					},
+					"response": []
+				}
+			],
+			"description": "Authentication and customer onboarding endpoints."
+		},
+		{
+			"name": "02-KYC",
+			"item": [
+				{
+					"name": "Get KYC Status & Limits",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"pm.test(\"Response has tier and remainingDailyLimit\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('currentTier');",
+									"    pm.expect(jsonData).to.have.property('remainingDailyLimit');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/kyc/status",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"kyc",
+								"status"
+							]
+						},
+						"description": "Retrieves current KYC tier (0-3), daily limit, today's spending, and remaining allowance."
+					},
+					"response": []
+				},
+				{
+					"name": "Upgrade to Tier 1 (NIN)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.currentTier).to.eql(1);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"nin\": \"12345678901\",\n    \"dateOfBirth\": \"1995-05-15\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/kyc/tier-1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"kyc",
+								"tier-1"
+							]
+						},
+						"description": "Upgrades customer to KYC Tier 1 via 11-digit National Identity Number (NIN). Increases daily transfer limit to ₦50,000."
+					},
+					"response": []
+				},
+				{
+					"name": "Upgrade to Tier 2 (BVN & Address)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.currentTier).to.eql(2);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"bvn\": \"12345678901\",\n    \"address\": \"Plot 12, Adeola Odeku Street, Victoria Island, Lagos\",\n    \"proofOfAddressUrl\": \"https://storage.bank.com/proofs/utility-bill-102.pdf\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/kyc/tier-2",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"kyc",
+								"tier-2"
+							]
+						},
+						"description": "Upgrades customer to KYC Tier 2 via 11-digit BVN and verified residential address. Increases daily transfer limit to ₦200,000."
+					},
+					"response": []
+				},
+				{
+					"name": "Upgrade to Tier 3 (Biometric Liveness)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.currentTier).to.eql(3);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"biometricSessionId\": \"bio_liveness_session_8819\",\n    \"livenessConfidence\": 0.98\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/kyc/tier-3",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"kyc",
+								"tier-3"
+							]
+						},
+						"description": "Upgrades customer to Tier 3 via biometric liveness verification. Increases daily transfer limit to ₦5,000,000."
+					},
+					"response": []
+				}
+			],
+			"description": "KYC identity verification, tier upgrades, and daily spending limit endpoints."
+		},
+		{
+			"name": "03-Accounts",
+			"item": [
+				{
+					"name": "Open Bank Account",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.id) {",
+									"    pm.environment.set(\"account_id\", jsonData.id);",
+									"    console.log(\"Saved account_id:\", jsonData.id);",
+									"}",
+									"if (jsonData.accountNumber) {",
+									"    pm.environment.set(\"account_number\", jsonData.accountNumber);",
+									"    console.log(\"Saved account_number:\", jsonData.accountNumber);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"type\": \"SAVINGS\",\n    \"currency\": \"NGN\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/accounts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"accounts"
+							]
+						},
+						"description": "Opens a new bank account for an active customer. Atomically generates a valid CBN NUBAN (check digit 3-7-3) and initializes the corresponding double-entry ledger wallet."
+					},
+					"response": []
+				},
+				{
+					"name": "List My Accounts",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(Array.isArray(jsonData)).to.be.true;"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/accounts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"accounts"
+							]
+						},
+						"description": "Lists all bank accounts owned by the authenticated customer with live ledger balances."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Account by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.id).to.eql(pm.environment.get(\"account_id\"));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/accounts/{{account_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"accounts",
+								"{{account_id}}"
+							]
+						},
+						"description": "Retrieves account metadata by UUID, verifying customer ownership."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Account Balance",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData).to.have.property('balance');",
+									"pm.expect(jsonData).to.have.property('availableBalance');"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/accounts/{{account_id}}/balance",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"accounts",
+								"{{account_id}}",
+								"balance"
+							]
+						},
+						"description": "Queries real-time balance in minor units (kobo) directly from the immutable double-entry ledger."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Account History (Ledger Lines)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(Array.isArray(jsonData)).to.be.true;"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/accounts/{{account_id}}/history",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"accounts",
+								"{{account_id}}",
+								"history"
+							]
+						},
+						"description": "Retrieves complete chronological ledger transaction lines for this account, including journal entry ID, direction (DEBIT/CREDIT), amount, and timestamps."
+					},
+					"response": []
+				}
+			],
+			"description": "Account opening, NUBAN resolution, balance inquiry, and transaction history."
+		},
+		{
+			"name": "04-Transfers",
+			"item": [
+				{
+					"name": "Deposit External Funds",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.id) {",
+									"    pm.environment.set(\"transfer_id\", jsonData.id);",
+									"    console.log(\"Saved transfer_id:\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Idempotency-Key",
+								"value": "{{$guid}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"accountId\": \"{{account_id}}\",\n    \"amount\": \"10000000\",\n    \"currency\": \"NGN\",\n    \"description\": \"Initial account funding (₦100,000.00)\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transfers/deposit",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transfers",
+								"deposit"
+							]
+						},
+						"description": "Credits the customer bank account from the internal bank clearing ledger account (CLEARING_NGN). Protected by Idempotency-Key."
+					},
+					"response": []
+				},
+				{
+					"name": "Internal Transfer (by Account UUID)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.id) {",
+									"    pm.environment.set(\"transfer_id\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Idempotency-Key",
+								"value": "{{$guid}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"sourceAccountId\": \"{{account_id}}\",\n    \"destinationAccountId\": \"{{dest_account_id}}\",\n    \"amount\": \"100000\",\n    \"currency\": \"NGN\",\n    \"description\": \"Internal transfer via account UUID\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transfers",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transfers"
+							]
+						},
+						"description": "Executes an atomic transfer between two customer accounts specified by UUID. Enforces KYC spending limit, pessimistic row lock in sorted order, debit/credit balance invariant, and idempotency."
+					},
+					"response": []
+				},
+				{
+					"name": "Internal Transfer (by 10-Digit NUBAN)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.id) {",
+									"    pm.environment.set(\"transfer_id\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							},
+							{
+								"key": "Idempotency-Key",
+								"value": "{{$guid}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"sourceAccountId\": \"{{account_id}}\",\n    \"destinationAccountNumber\": \"{{dest_account_number}}\",\n    \"amount\": \"50000\",\n    \"currency\": \"NGN\",\n    \"description\": \"Internal transfer via 10-digit NUBAN\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transfers",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transfers"
+							]
+						},
+						"description": "Executes an internal transfer where the destination account is specified by its 10-digit NUBAN account number."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Transfer Receipt",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.id).to.eql(pm.environment.get(\"transfer_id\"));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/transfers/{{transfer_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transfers",
+								"{{transfer_id}}"
+							]
+						},
+						"description": "Retrieves the status, journal entry reference, amount, and timestamp for a completed transfer."
+					},
+					"response": []
+				}
+			],
+			"description": "Money transfer operations including deposits, cross-account transfers, and receipt inquiry."
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000"
+		}
+	]
+}

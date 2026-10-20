@@ -1,21 +1,52 @@
 services:
   postgres:
-    image: postgres:16-alpine                   # the image + tag from the requirements
+    image: postgres:16-alpine
     container_name: banking-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}       # read from .env
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-banking_db}
     ports:
-      - "5432:5432"                 # host:container
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-banking_db}"]
+      interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - banking-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: banking-api
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-banking_db}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-default_banking_jwt_super_secret_key_change_me_in_prod}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - banking-network
 
 volumes:
-  pgdata:                            # the same volume name you used above
+  pgdata:
+
+networks:
+  banking-network:
+    driver: bridge
