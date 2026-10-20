@@ -407,7 +407,7 @@ sequenceDiagram
     Auth-->>User: 201 Created { customerId, message }
 
     User->>Auth: POST /auth/verify-otp (customerId, otpCode)
-    Auth->>DB: Verify code, expiration & attempt count (<5)
+    Auth->>DB: Verify code, expiration & attempt count (under 5)
     Auth->>DB: UPDATE otp_codes (used_at) & customer (status=ACTIVE)
     Auth-->>User: 200 OK { message: "Account active" }
 
@@ -816,23 +816,23 @@ Synchronous operations like external Telco/SMS OTP dispatch or third-party email
 
 ```mermaid
 flowchart TB
-    subgraph HTTPThread["HTTP Request Lifecycle (&lt;15ms)"]
+    subgraph HTTPThread["HTTP Request Lifecycle (Sub-15ms)"]
         Client["Client (Browser / App)"]
         Controller["AuthController / TransfersController"]
         AuthSvc["AuthService / Domain Service"]
         DB[("PostgreSQL Primary DB")]
         NotifSvc["NotificationsService<br/>(Producer)"]
 
-        Client -->|POST /auth/register| Controller
+        Client -->|"POST /auth/register"| Controller
         Controller --> AuthSvc
         AuthSvc -->|"Atomic Transaction ($transaction)"| DB
         AuthSvc -->|"sendOtp(to, code, purpose)"| NotifSvc
         NotifSvc -->|"queue.add('send-otp', payload)"| RedisQueue
-        AuthSvc -->> Client: 201 Created (Instant Response)
+        AuthSvc -->|"201 Created (Instant Response)"| Client
     end
 
     subgraph QueueBuffer["BullMQ Persistent Redis Buffer"]
-        RedisQueue[("Redis Queue: 'notifications'<br/>State: 'waiting' ➔ 'active'")]
+        RedisQueue[("Redis Queue: 'notifications'<br/>State: 'waiting' to 'active'")]
     end
 
     subgraph WorkerProcess["Worker Pool / Consumer Lifecycle"]
@@ -858,7 +858,7 @@ flowchart TD
 
     Exec -- "Success (HTTP 200)" --> Completed["Queue State: COMPLETED<br/>removeOnComplete: true<br/>Purged from Redis ✅"]
     
-    Exec -- "Failure / Timeout" --> RetryCheck{"Attempt Count &lt; 3?"}
+    Exec -- "Failure / Timeout" --> RetryCheck{"Attempt Count under 3?"}
     
     RetryCheck -- "Yes (Attempt 1 or 2)" --> Delay["Delayed State (Exponential Backoff)<br/>Delay = 1000ms * 2^(attempt-1)<br/>• 1st retry: 1s<br/>• 2nd retry: 2s<br/>• 3rd retry: 4s"]
     Delay --> Waiting
@@ -891,7 +891,7 @@ sequenceDiagram
     Producer->>Redis: queue.add('send-otp', { to, code, purpose }, { attempts: 3, backoff: 'exponential' })
     Redis-->>Producer: Job enqueued (#id)
     Producer-->>Auth: Promise resolved (instant)
-    Auth-->>User: 201 Created { customerId, message } (Latency &lt; 25ms!)
+    Auth-->>User: 201 Created { customerId, message } (Latency under 25ms)
 
     Note over Redis,Worker: Asynchronous Background Execution
     Redis->>Worker: Dispatch job #id
@@ -941,11 +941,11 @@ flowchart TD
     Schedule(["⏰ Cron: 00:00:00 UTC Daily"]) --> Start["LedgerReconciliationService.reconcile()"]
     Start --> Debits["Aggregate: SUM(amount) WHERE direction = DEBIT"]
     Start --> Credits["Aggregate: SUM(amount) WHERE direction = CREDIT"]
-    Debits --> Diff["Compute Drift: Δ = Total Debits - Total Credits"]
+    Debits --> Diff["Compute Drift: Diff = Total Debits - Total Credits"]
     Credits --> Diff
     Diff --> Check{"Is Drift === 0n?"}
     Check -- "Yes (Drift = 0)" --> Healthy["Emit Audit Log:<br/>✅ [LedgerReconciliation] System balanced.<br/>Stamp ledger as in equilibrium"]
-    Check -- "No (Drift ≠ 0)" --> Alarm["🚨 Emit Critical Alarm:<br/>[CRITICAL_LEDGER_IMBALANCE]<br/>Throw exception to trigger platform alert"]
+    Check -- "No (Drift != 0)" --> Alarm["🚨 Emit Critical Alarm:<br/>[CRITICAL_LEDGER_IMBALANCE]<br/>Throw exception to trigger platform alert"]
 ```
 
 ---
