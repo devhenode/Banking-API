@@ -9,11 +9,24 @@ import { TransfersModule } from './modules/transfers/transfers.module.js';
 import { PrismaModule } from './infrastructure/prisma/prisma.module.js';
 import { AccountsModule } from './modules/accounts/accounts.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
-import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
+import { BullModule } from '@nestjs/bullmq';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+        },
+      }),
+      inject: [ConfigService],
+    }),
     LedgerModule,
     AuthModule,
     CustomersModule,

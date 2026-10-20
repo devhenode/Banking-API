@@ -3,7 +3,7 @@
 > **Document Purpose:** Central architectural baseline for Spec-Driven Development (SDD).  
 > **Constitutional Authority:** Complies with [.specify/memory/constitution.md](file:///Users/macbook/Documents/GitHub/Banking-API/.specify/memory/constitution.md).  
 > **Mental Model Baseline:** Governed by [The Padlock & Prototype Framework](file:///Users/macbook/Documents/GitHub/Banking-API/docs/padlock_and_prototype_framework.md).  
-> **Status:** Phase 1 (Core Monolith) 100% Complete & Verified · Ready for Phase 2.
+> **Status:** Phases 1, 2, and 3 100% Complete & Verified · Ready for Phase 4 (Load Testing & Tuning).
 
 ---
 
@@ -16,6 +16,9 @@ The **Banking API** is a production-grade, deployable commercial banking backend
 * **Framework:** NestJS 12 (TypeScript, ESM `NodeNext` module resolution, dependency injection, modular bounded contexts).
 * **Database & Driver:** PostgreSQL 16 (Alpine container) with native `BIGINT` minor units and plpgsql append-only triggers.
 * **ORM / Database Layer:** Prisma 7 with `@prisma/adapter-pg` driver adapter and raw parameterized SQL (`$queryRaw`) for deterministic row-level pessimistic locking (`FOR UPDATE`).
+* **Background Processing:** BullMQ 6 with Redis 7 Alpine (exponential backoff retries, dead-letter auditing).
+* **Scheduling:** `@nestjs/schedule` (autonomous midnight zero-drift ledger reconciliation audit).
+* **Containerization & CI/CD:** Multi-stage Docker Alpine (`USER node`), Docker Compose mesh, GitHub Actions 6-tier quality gates.
 * **Authentication:** Stateless JWT bearer tokens with isolated bcrypt (12 rounds) credential storage and SHA-256 hashed 6-digit OTP verification.
 * **Banking Standards:** Central Bank of Nigeria (CBN) 10-digit NUBAN check-digit algorithm (weight vector `[3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3]`), ISO-4217 currency tracking (`NGN`), and 3-tier KYC daily spending policies.
 
@@ -42,46 +45,44 @@ flowchart TD
    * *The Coat-Check Ticket:* [IdempotencyService](file:///Users/macbook/Documents/GitHub/Banking-API/src/common/idempotency/idempotency.service.ts#L89-L167) preventing duplicate processing.
    * *The Narrow Doorway:* [LedgerService.post()](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/ledger/ledger.service.ts#L126-L142) sorting row IDs in ascending order so workers never collide in reverse order.
    * *The Unforgiving Safe:* PostgreSQL append-only triggers preventing ledger alteration.
+   * *The Shock Absorber:* Redis + BullMQ queue buffering external telco latency away from the money transfer path.
 
 ---
 
-## 3. ✅ Current Reality — What Is Done (Phase 1: Core Monolith)
+## 3. ✅ Current Reality — What Is Done (Phases 1, 2, and 3)
 
-Phase 1 is **100% complete, verified, and committed**. The monolithic core is completely operational with zero compilation errors, zero lint warnings, and 100% test coverage across 70 automated tests.
+Phases 1, 2, and 3 are **100% complete, verified, and committed**. The platform is completely operational with zero compilation errors, zero lint warnings, and 100% test coverage across 77 automated tests.
 
 | Step | Component | Status | Codebase References | Invariants Protected |
 |:---:|---|:---:|---|---|
-| **01** | **Scaffolding & Infrastructure** | ✅ Done | [docker-compose.yml](file:///Users/macbook/Documents/GitHub/Banking-API/docker-compose.yml)<br/>[prisma/schema.prisma](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/schema.prisma)<br/>[prisma.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/infrastructure/prisma/prisma.service.ts) | Dockerized Postgres 16 Alpine, Prisma 7 pg-adapter connection lifecycle, environment isolation. |
-| **02** | **Modular Boundaries (ADR-01)** | ✅ Done | [src/modules/](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/)<br/>[app.module.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/app.module.ts) | Strict bounded contexts: Auth, Customers, Accounts, Ledger, Transfers, KYC, Notifications. Single table ownership per module. |
-| **03** | **Customer Registration & Auth** | ✅ Done | [auth.service.ts:26-68](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/auth.service.ts#L26-L68)<br/>[auth.controller.ts:11-14](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/auth.controller.ts#L11-L14) | Atomic customer + credential + OTP code insertion. Bcrypt 12 rounds. Raw OTPs never stored in plain text. |
-| **04** | **OTP Verification & JWT** | ✅ Done | [auth.service.ts:70-134](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/auth.service.ts#L70-L134)<br/>[auth.guard.ts:11-37](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/guards/auth.guard.ts#L11-L37) | SHA-256 OTP hashing, 10-minute expiry window, 3-attempt brute-force lockout, single-use invalidation, JWT token issuance. |
-| **05** | **Account Opening & CBN NUBAN** | ✅ Done | [accounts.service.ts:27-84](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/accounts/accounts.service.ts#L27-L84)<br/>[nuban.service.ts:22-47](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/accounts/nuban.service.ts#L22-L47) | 10-digit NUBAN with Central Bank of Nigeria MOD-10 algorithm, collision retry loop, atomic creation with ledger wallet. |
-| **06** | **Double-Entry Schema & Triggers** | ✅ Done | [schema.prisma:100-156](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/schema.prisma#L100-L156)<br/>[20261016114145_add_ledger](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/migrations/20261016114145_add_ledger/migration.sql#L75-L95) | `ledger_accounts`, `journal_entries`, `ledger_lines`. `CHECK (amount > 0)`. Postgres `forbid_ledger_mutation()` triggers strictly forbid UPDATE and DELETE. |
-| **07** | **Account Queries & Protection** | ✅ Done | [accounts.controller.ts:20-56](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/accounts/accounts.controller.ts#L20-L56)<br/>[accounts.service.ts:86-150](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/accounts/accounts.service.ts#L86-L150) | Customer ownership verification (`ForbiddenException`), balance inquiries and transaction history delegated to Ledger. |
-| **08** | **The Money Engine (Ledger Posting)** | ✅ Done | [ledger.service.ts:96-157](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/ledger/ledger.service.ts#L96-L157) | Debits = credits invariant (`totalDebits === totalCredits`), positive amounts only, pessimistic row locking (`ORDER BY id ASC FOR UPDATE`), overdraft rejection on `LIABILITY` accounts. |
-| **09** | **Deposits, Transfers & Idempotency** | ✅ Done | [transfers.service.ts:54-265](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/transfers/transfers.service.ts#L54-L265)<br/>[idempotency.service.ts:42-167](file:///Users/macbook/Documents/GitHub/Banking-API/src/common/idempotency/idempotency.service.ts#L42-L167) | SHA-256 fingerprinting, replay of completed responses, 409 Conflict on in-flight requests, 422 on payload tampering, atomic rollback on failure. |
-| **10** | **KYC Tiers & Daily Limit Policy** | ✅ Done | [kyc.service.ts:35-215](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/kyc/kyc.service.ts#L35-L215)<br/>[kyc-verifier.provider.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/kyc/providers/kyc-verifier.provider.ts) | Adapter pattern for identity verification providers. Tier 1 (₦50k), Tier 2 (₦200k), Tier 3 (₦5m). Cumulative 24h spend window checked before ledger posting. |
-| **11** | **Global Exception Filter** | ✅ Done | [global-exception.filter.ts:19-85](file:///Users/macbook/Documents/GitHub/Banking-API/src/common/filters/global-exception.filter.ts#L19-L85) | Translates Prisma P2002 ➔ 409, P2025 ➔ 404, P2003 ➔ 400, trigger exceptions ➔ 400 Bad Request. Sanitizes internal server errors (500). |
-| **12** | **Automated Concurrency Stress Test** | ✅ Done | [concurrent-transfers.e2e-spec.ts:84-280](file:///Users/macbook/Documents/GitHub/Banking-API/test/concurrent-transfers.e2e-spec.ts#L84-L280) | 20 parallel cross-transfers (A->B and B->A) with zero deadlocks (`40P01`). Double-spending race guard rejected. Atomic idempotency collision guard proved. |
-| **13** | **Postman Collection & Environment** | ✅ Done | [Banking_API.postman_collection.json](file:///Users/macbook/Documents/GitHub/Banking-API/Banking_API.postman_collection.json)<br/>[Banking_API.postman_environment.json](file:///Users/macbook/Documents/GitHub/Banking-API/Banking_API.postman_environment.json) | Complete Postman v2.1.0 collection covering Auth, KYC, Accounts, Transfers. Pre-request and test scripts automate token capture, IDs, and dynamic `{{$guid}}` idempotency keys. |
+| **01** | **Scaffolding & Infrastructure** | ✅ Done | [docker-compose.yml](file:///Users/macbook/Documents/GitHub/Banking-API/docker-compose.yml)<br/>[prisma/schema.prisma](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/schema.prisma) | Dockerized Postgres 16 & Redis 7 Alpine, Prisma 7 pg-adapter connection lifecycle. |
+| **02** | **Modular Boundaries** | ✅ Done | [src/modules/](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/) | Strict bounded contexts: Auth, Customers, Accounts, Ledger, Transfers, KYC, Notifications. |
+| **03** | **Customer Auth & Registration** | ✅ Done | [auth.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/auth.service.ts) | Atomic customer + credential + OTP insertion. Bcrypt 12 rounds. Raw OTPs never stored in plain text. |
+| **04** | **OTP Verification & JWT** | ✅ Done | [auth.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/auth/auth.service.ts) | SHA-256 OTP hashing, 10-minute expiry window, 5-attempt brute-force lockout, single-use invalidation. |
+| **05** | **Account Opening & CBN NUBAN** | ✅ Done | [nuban.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/accounts/nuban.service.ts) | 10-digit NUBAN with Central Bank of Nigeria MOD-10 algorithm, collision retry loop. |
+| **06** | **Double-Entry Schema & Triggers** | ✅ Done | [schema.prisma](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/schema.prisma) | Append-only ledger triggers strictly forbid UPDATE and DELETE on ledger lines. |
+| **07** | **The Money Engine (Ledger Posting)** | ✅ Done | [ledger.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/ledger/ledger.service.ts) | Debits = credits invariant (`totalDebits === totalCredits`), positive amounts only, pessimistic row locking (`ORDER BY id ASC FOR UPDATE`). |
+| **08** | **Idempotent Transfers & Limits** | ✅ Done | [transfers.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/transfers/transfers.service.ts) | Two-phase idempotency (409 Conflict vs 201 Replay), 3-tier KYC limits checked before posting. |
+| **09** | **Concurrency Stress Test** | ✅ Done | [concurrent-transfers.e2e-spec.ts](file:///Users/macbook/Documents/GitHub/Banking-API/test/concurrent-transfers.e2e-spec.ts) | 20 parallel cross-transfers (A->B and B->A) with zero deadlocks (`40P01`) and balance conservation. |
+| **10** | **Delivery & CI/CD (Phase 2)** | ✅ Done | [Dockerfile](file:///Users/macbook/Documents/GitHub/Banking-API/Dockerfile)<br/>[.github/workflows/ci.yml](file:///Users/macbook/Documents/GitHub/Banking-API/.github/workflows/ci.yml) | Multi-stage Docker Alpine (`USER node`), 6-tier automated quality gates on every push/PR. |
+| **11** | **Asynchronous Queue Engine (Phase 3)** | ✅ Done | [notifications.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/notifications/notifications.service.ts)<br/>[notification.processor.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/notifications/notification.processor.ts) | BullMQ + Redis 7 queue buffer, exponential backoff retries (1s, 2s, 4s), non-blocking OTP and transfer alerts. |
+| **12** | **Midnight Ledger Audit (Phase 3)** | ✅ Done | [ledger-reconciliation.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/ledger/ledger-reconciliation.service.ts) | Scheduled cron worker at `00:00:00 UTC` asserting system-wide double-entry equilibrium ($\Delta = 0$). |
 
 ---
 
 ## 4. 🚀 The Roadmap Ahead — What Is Yet To Be Done
 
-The project moves deliberately from a rock-solid monolithic core to an enterprise-grade distributed banking platform. In compliance with **Principle V (Incremental Delivery Must Preserve Reversibility)**, each phase builds upon the operational invariants of preceding phases:
-
 ```mermaid
 flowchart TD
-    P1["Phase 1: Core Monolith ✅<br/>(Double-entry, NUBAN, Idempotency, KYC, Locking)"] --> P2["Phase 2: Delivery & CI/CD ⏳<br/>(Docker multi-stage, Compose network, GitHub Actions)"]
-    P2 --> P3["Phase 3: Background Workers & Queues<br/>(Redis, BullMQ, Async Notifications, Daily Resets)"]
-    P3 --> P4["Phase 4: Concurrency Proof & Load Tests<br/>(K6 stress tests, Connection pooling, PgBouncer)"]
+    P1["Phase 1: Core Monolith ✅<br/>(Double-entry, NUBAN, Idempotency, KYC, Locking)"] --> P2["Phase 2: Delivery & CI/CD ✅<br/>(Docker multi-stage, Compose mesh, GitHub Actions)"]
+    P2 --> P3["Phase 3: Background Workers & Queues ✅<br/>(Redis 7, BullMQ workers, Exponential retries, Cron audits)"]
+    P3 --> P4["Phase 4: Concurrency Proof & Load Tests ⏳<br/>(K6 stress tests, Connection pooling, PgBouncer)"]
     P4 --> P5["Phase 5: Domain Events & Transactional Outbox<br/>(Atomic Outbox table, Dual-write elimination)"]
     P5 --> P6["Phase 6: Distributed Streaming (Kafka)<br/>(Audit stream, Fraud detection, Ledger consumers)"]
     P6 --> P7["Phase 7: Microservices & Platform Ops<br/>(Extracted Auth/Ledger/Transfer services, Observability)"]
 ```
 
-### Phase 2: Delivery, Containerization & CI/CD Pipeline (Next Immediate Phase)
+### Phase 4: High-Throughput Stress Testing & Database Tuning (Next Immediate Phase)
 * **Production Multi-Stage Dockerfile:** Lightweight Node.js Alpine container separating build-time devDependencies from lean production runtime.
 * **Docker Compose Network Orchestration:** Unified `docker-compose.yml` defining interconnected `api` and `postgres` services, container health checks, network aliases, and isolated named data volumes.
 * **Automated CI/CD Workflow (GitHub Actions):** Continuous Integration pipeline enforcing automated linting (`oxlint`), type-checking (`tsc`), unit tests (`vitest run`), e2e integration tests (`vitest run --config ./vitest.config.e2e.ts`), and build validation on every pull request.

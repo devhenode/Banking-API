@@ -1,9 +1,9 @@
 # 🏦 Banking API — Design Document
 
-> **Status:** Living document · Phase 1 (Core Monolith)
-> **Last updated:** 2026-10-15
+> **Status:** Living document · Phase 3 (Asynchronous Processing & Queues)
+> **Last updated:** 2026-10-20
 
-This document records the architecture of the Banking API and the reasoning behind each decision. Every decision is also listed in the [Decision Log](#11--decision-log).
+This document records the architecture of the Banking API and the reasoning behind each decision. Every decision is also listed in the [Decision Log](#13--decision-log).
 
 ---
 
@@ -19,8 +19,10 @@ This document records the architecture of the Banking API and the reasoning behi
 8. [Data Model](#8--data-model)
 9. [Stack & Rationale](#9--stack--rationale)
 10. [Engineering Standards](#10--engineering-standards)
-11. [Decision Log](#11--decision-log)
-12. [Open Questions](#12--open-questions)
+11. [Delivery & Containerization Architecture (Phase 2)](#11--delivery--containerization-architecture-phase-2)
+12. [Asynchronous Queues & Background Processing (Phase 3)](#12--asynchronous-queues--background-processing-phase-3)
+13. [Decision Log](#13--decision-log)
+14. [Open Questions](#14--open-questions)
 
 ---
 
@@ -375,7 +377,7 @@ flowchart TD
 | `AccountsModule` | Account opening, NUBAN generation, status, **balance & history endpoints** | `accounts` | `AccountsService` |
 | `LedgerModule` | **The only writer of money.** Postings, the debit = credit rule, balances, row locks. **No controller.** | `ledger_accounts`, `journal_entries`, `ledger_lines` | `LedgerService` only |
 | `TransfersModule` | Use-case orchestration: idempotency → ownership → limits → post to the ledger | `transfers` | — |
-| `NotificationsModule` | `NotificationSender` interface + console / email implementations | — | `NotificationsService` |
+| `NotificationsModule` | Asynchronous notification queue (BullMQ), worker processor with exponential backoff retries, pluggable `NotificationSender` | — | `NotificationsService` |
 | `PrismaModule` *(infrastructure)* | Database client and lifecycle. **Not global**: imported explicitly by every module that owns tables. | — | `PrismaService` |
 | `common/` *(not a module)* | Idempotency interceptor, exception filters, validation pipes | `idempotency_keys` | — |
 
@@ -664,6 +666,9 @@ erDiagram
 | Framework | **NestJS 12** |
 | Data layer | **Prisma 7** with the `pg` driver adapter, plus raw SQL for row locks |
 | Database | **PostgreSQL 16** (Alpine image) |
+| Background Queues | **BullMQ 6** with **Redis 7** (Alpine image) |
+| Containerization | **Docker & Docker Compose** (multi-stage, non-root `USER node`) |
+| CI/CD Quality Gates | **GitHub Actions** (6-tier automated verification pipeline) |
 | Configuration | `@nestjs/config`, loaded once and fail-fast on missing values |
 | Testing | Vitest, Postman |
 
@@ -699,7 +704,253 @@ erDiagram
 
 ---
 
-## 11. 📋 Decision Log
+## 11. 🚢 Delivery & Containerization Architecture (Phase 2)
+
+### Container Architecture & Network Mesh
+
+Production isolation guarantees that the application runs uniformly across developer workstations, staging environments, and production clusters.
+
+```mermaid
+flowchart TB
+    subgraph Host["Host Machine / Public Gateway"]
+        direction TB
+        ClientReq["HTTP Requests :3000"]
+        PgPort["Dev / Admin DB Access :5432"]
+        RedisPort["Dev / CLI Cache Access :6379"]
+    end
+
+    subgraph DockerNetwork["Docker Bridge Network (banking-network)"]
+        direction TB
+        
+        subgraph AppContainer["banking-api (Node.js 22 Alpine)"]
+            NestApp["NestJS Application<br/>(USER node, port 3000)"]
+            Entrypoint["docker-entrypoint.sh<br/>1. Run Prisma migrate deploy<br/>2. Exec node dist/main.js"]
+            Healthcheck["Healthcheck Probe<br/>wget 127.0.0.1:3000/health (every 10s)"]
+            Entrypoint --> NestApp
+            Healthcheck -.-> NestApp
+        end
+
+        subgraph DBContainer["banking-postgres (PostgreSQL 16 Alpine)"]
+            PGSQL["PostgreSQL Engine"]
+            PGHealth["pg_isready -U postgres (every 5s)"]
+            PGHealth -.-> PGSQL
+        end
+
+        subgraph RedisContainer["banking-redis (Redis 7 Alpine)"]
+            RedisEngine["Redis In-Memory Engine"]
+            RedisHealth["redis-cli ping (every 5s)"]
+            RedisHealth -.-> RedisEngine
+        end
+    end
+
+    subgraph Storage["Persistent Host Volumes"]
+        pgdata[("pgdata volume<br/>/var/lib/postgresql/data")]
+        redisdata[("redisdata volume<br/>/data (AOF/RDB)")]
+    end
+
+    ClientReq -->|port 3000| NestApp
+    PgPort -->|port 5432| PGSQL
+    RedisPort -->|port 6379| RedisEngine
+
+    AppContainer -->|"DATABASE_URL (depends_on: healthy)"| DBContainer
+    AppContainer -->|"REDIS_HOST: redis (depends_on: healthy)"| RedisContainer
+
+    DBContainer --- pgdata
+    RedisContainer --- redisdata
+```
+
+### Multi-Stage Secure Dockerfile Pipeline
+
+The build uses a 3-stage pattern to produce a minimal, vulnerability-reduced production image:
+
+```mermaid
+flowchart TD
+    subgraph Stage1["Stage 1: Base (node:22-alpine)"]
+        A1["Install Alpine runtime dependencies<br/>• openssl, libc6-compat, ca-certificates"]
+    end
+
+    subgraph Stage2["Stage 2: Builder"]
+        B1["COPY package*.json"] --> B2["npm ci (Exact lockfile install)"]
+        B2 --> B3["COPY source code & prisma/"]
+        B3 --> B4["npx prisma generate (Build schema client)"]
+        B4 --> B5["npm run build (Compile TypeScript to dist/)"]
+        B5 --> B6["npm prune --omit=dev (Strip devDependencies)"]
+    end
+
+    subgraph Stage3["Stage 3: Production Runner"]
+        C1["FROM base (Minimal footprint)"]
+        C2["COPY --from=builder node_modules/ & dist/"]
+        C3["COPY docker-entrypoint.sh & prisma/"]
+        C4["USER node (Non-root security gate)"]
+        C5["EXPOSE 3000"]
+        C6["ENTRYPOINT: ./docker-entrypoint.sh"]
+        C1 --> C2 --> C3 --> C4 --> C5 --> C6
+    end
+
+    Stage1 --> Stage2
+    Stage2 --> Stage3
+```
+
+### Automated CI/CD Quality Gates Pipeline
+
+Every Pull Request and commit to `master` must pass 6 non-negotiable automated quality gates before release:
+
+```mermaid
+flowchart LR
+    Push(["Push / PR to master"]) --> Gate1["1. Oxlint & Type-Aware Analysis<br/>• Zero warnings / zero errors"]
+    Gate1 --> Gate2["2. Prisma Generate & Migration Validation<br/>• Schema sync & valid SQL"]
+    Gate2 --> Gate3["3. TypeScript Nest Build<br/>• Strict compilation to dist/"]
+    Gate3 --> Gate4["4. Vitest Unit Test Suite<br/>• 100% test passing"]
+    Gate4 --> Gate5["5. PostgreSQL Concurrency E2E<br/>• 20 parallel cross-transfers<br/>• 0 deadlocks (40P01)"]
+    Gate5 --> Gate6["6. Multi-Stage Docker Build<br/>• Image build & runner validation"]
+    Gate6 --> Deploy(["Deployable Release Artifact ✅"])
+```
+
+---
+
+## 12. ⚡ Asynchronous Queues & Background Processing (Phase 3)
+
+### The Queue Engine Architecture
+
+Synchronous operations like external Telco/SMS OTP dispatch or third-party email notifications are extracted from the HTTP cycle and routed through a persistent Redis-backed BullMQ buffer:
+
+```mermaid
+flowchart TB
+    subgraph HTTPThread["HTTP Request Lifecycle (&lt;15ms)"]
+        Client["Client (Browser / App)"]
+        Controller["AuthController / TransfersController"]
+        AuthSvc["AuthService / Domain Service"]
+        DB[("PostgreSQL Primary DB")]
+        NotifSvc["NotificationsService<br/>(Producer)"]
+
+        Client -->|POST /auth/register| Controller
+        Controller --> AuthSvc
+        AuthSvc -->|"Atomic Transaction ($transaction)"| DB
+        AuthSvc -->|"sendOtp(to, code, purpose)"| NotifSvc
+        NotifSvc -->|"queue.add('send-otp', payload)"| RedisQueue
+        AuthSvc -->> Client: 201 Created (Instant Response)
+    end
+
+    subgraph QueueBuffer["BullMQ Persistent Redis Buffer"]
+        RedisQueue[("Redis Queue: 'notifications'<br/>State: 'waiting' ➔ 'active'")]
+    end
+
+    subgraph WorkerProcess["Worker Pool / Consumer Lifecycle"]
+        Worker["NotificationProcessor<br/>(@Processor('notifications'))"]
+        Sender["ConsoleNotificationSender<br/>(NotificationSender interface)"]
+        Telco["External SMS / Email Gateway<br/>(Twilio / Sendgrid / Termii)"]
+
+        RedisQueue -->|"Fetch Next Job (FIFO)"| Worker
+        Worker -->|"sender.send(to, message)"| Sender
+        Sender -->|"HTTP / REST API"| Telco
+    end
+```
+
+### Job Lifecycle, Exponential Backoff & Dead-Letter Auditing
+
+External network communication is inherently unreliable. The background worker applies an automated exponential backoff retry policy before dead-lettering:
+
+```mermaid
+flowchart TD
+    Init["Job Added: queue.add('send-otp', payload)"] --> Waiting["Queue State: WAITING (Redis)"]
+    Waiting --> Active["Queue State: ACTIVE (Picked by Worker)"]
+    Active --> Exec{"Worker calls External Gateway"}
+
+    Exec -- "Success (HTTP 200)" --> Completed["Queue State: COMPLETED<br/>removeOnComplete: true<br/>Purged from Redis ✅"]
+    
+    Exec -- "Failure / Timeout" --> RetryCheck{"Attempt Count &lt; 3?"}
+    
+    RetryCheck -- "Yes (Attempt 1 or 2)" --> Delay["Delayed State (Exponential Backoff)<br/>Delay = 1000ms * 2^(attempt-1)<br/>• 1st retry: 1s<br/>• 2nd retry: 2s<br/>• 3rd retry: 4s"]
+    Delay --> Waiting
+    
+    RetryCheck -- "No (3 attempts exhausted)" --> Failed["Queue State: FAILED (Dead-Letter)<br/>removeOnFail: false<br/>Retained in Redis for Alerting / Audit ❌"]
+```
+
+### Registration & Asynchronous Notification Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Prospective Customer
+    participant Auth as AuthService
+    participant DB as Postgres (customers, credentials, otp_codes)
+    participant Producer as NotificationsService (Producer)
+    participant Redis as Redis (BullMQ: notifications)
+    participant Worker as NotificationProcessor (Worker)
+    participant Sender as NotificationSender
+
+    User->>Auth: POST /auth/register (name, email/phone, password)
+    Auth->>DB: Check uniqueness (email/phone)
+    Auth->>Auth: Hash password (bcrypt) & generate 6-digit OTP (SHA-256)
+    Note over Auth,DB: Single Transaction ($transaction)
+    Auth->>DB: INSERT customer (PENDING_VERIFICATION)
+    Auth->>DB: INSERT credential (password_hash)
+    Auth->>DB: INSERT otp_code (code_hash, expires_at +10m)
+    
+    Auth->>Producer: sendOtp(recipient, rawOtp, REGISTRATION)
+    Producer->>Redis: queue.add('send-otp', { to, code, purpose }, { attempts: 3, backoff: 'exponential' })
+    Redis-->>Producer: Job enqueued (#id)
+    Producer-->>Auth: Promise resolved (instant)
+    Auth-->>User: 201 Created { customerId, message } (Latency &lt; 25ms!)
+
+    Note over Redis,Worker: Asynchronous Background Execution
+    Redis->>Worker: Dispatch job #id
+    Worker->>Sender: send(to, message)
+    Sender-->>Worker: SMS/Email Delivered
+    Worker->>Redis: Mark job completed
+```
+
+### Asynchronous Debit & Credit Transaction Alerts
+
+Alerts run **post-commit** outside the database transaction, eliminating any chance of phantom alerts or transaction delays:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Sender (Alice)
+    actor Bob as Recipient (Bob)
+    participant Ctrl as TransfersController
+    participant Svc as TransfersService
+    participant DB as Postgres ($transaction)
+    participant Queue as Redis Queue ('notifications')
+    participant Worker as NotificationProcessor
+    participant Sender as NotificationSender
+
+    Alice->>Ctrl: POST /transfers (from Alice to Bob, ₦5,000)
+    Ctrl->>Svc: transfer(...)
+    Svc->>DB: Atomically check locks, post ledger, create transfer & update idempotency
+    DB-->>Svc: Commit Success (201 Created)
+    Svc->>Queue: Enqueue 'send-transaction-alert' (DEBIT to Alice)
+    Svc->>Queue: Enqueue 'send-transaction-alert' (CREDIT to Bob)
+    Svc-->>Ctrl: Return responsePayload
+    Ctrl-->>Alice: 201 Created { id, amount: "500000", status: "COMPLETED" } (Instant!)
+
+    Note over Queue,Worker: Background Asynchronous Delivery
+    Queue->>Worker: Dispatch DEBIT alert
+    Worker->>Sender: send(Alice, "[ALERT] DEBIT of NGN 5,000...")
+    Queue->>Worker: Dispatch CREDIT alert
+    Worker->>Sender: send(Bob, "[ALERT] CREDIT of NGN 5,000...")
+```
+
+### Scheduled Midnight Double-Entry Ledger Audit
+
+An autonomous background cron runner executes at `00:00:00 UTC` to verify system-wide financial equilibrium:
+
+```mermaid
+flowchart TD
+    Schedule(["⏰ Cron: 00:00:00 UTC Daily"]) --> Start["LedgerReconciliationService.reconcile()"]
+    Start --> Debits["Aggregate: SUM(amount) WHERE direction = DEBIT"]
+    Start --> Credits["Aggregate: SUM(amount) WHERE direction = CREDIT"]
+    Debits --> Diff["Compute Drift: Δ = Total Debits - Total Credits"]
+    Credits --> Diff
+    Diff --> Check{"Is Drift === 0n?"}
+    Check -- "Yes (Drift = 0)" --> Healthy["Emit Audit Log:<br/>✅ [LedgerReconciliation] System balanced.<br/>Stamp ledger as in equilibrium"]
+    Check -- "No (Drift ≠ 0)" --> Alarm["🚨 Emit Critical Alarm:<br/>[CRITICAL_LEDGER_IMBALANCE]<br/>Throw exception to trigger platform alert"]
+```
+
+---
+
+## 13. 📋 Decision Log
 
 | ID | Decision | Section |
 |:---:|---|:---:|
@@ -726,10 +977,18 @@ erDiagram
 | ADR-21 | All timestamps are `timestamptz` | [8](#8--data-model) |
 | ADR-22 | Database-level `CHECK` constraints back up application validation | [8](#8--data-model) |
 | ADR-23 | OTP codes stored hashed with expiration, attempt limit, and purpose enum | [8](#8--data-model) |
+| ADR-24 | Multi-stage Docker containerization with non-root security gate (`USER node`) and container healthcheck probes | [11](#11--delivery--containerization-architecture-phase-2) |
+| ADR-25 | 6-tier automated CI/CD pipeline blocking unlinted or non-migratable code before deploy | [11](#11--delivery--containerization-architecture-phase-2) |
+| ADR-26 | Redis 7 persistent backing buffer for asynchronous queues | [12](#12--asynchronous-queues--background-processing-phase-3) |
+| ADR-27 | Decoupled BullMQ background job processing with exponential backoff retries for external communications | [12](#12--asynchronous-queues--background-processing-phase-3) |
+| ADR-28 | Autonomous scheduled midnight double-entry ledger reconciliation audit (`@nestjs/schedule`) | [12](#12--asynchronous-queues--background-processing-phase-3) |
+| ADR-29 | Post-commit asynchronous dispatching of debit and credit transaction alerts | [12](#12--asynchronous-queues--background-processing-phase-3) |
 
 ---
 
-## 12. ❓ Open Questions
+---
+
+## 14. ❓ Open Questions
 
 | # | Question | Notes |
 |:---:|---|---|

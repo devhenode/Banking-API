@@ -13,7 +13,7 @@ WORKDIR /app
 FROM base AS builder
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY tsconfig.json tsconfig.build.json nest-cli.json prisma7.config.ts ./
 COPY prisma ./prisma
@@ -26,7 +26,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # Prune devDependencies to keep the production layer lean
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev --ignore-scripts
 
 # -------------------------------------------------------------------
 # Stage 3: Production Runner (secure, non-root user)

@@ -2,6 +2,7 @@ import {
     BadRequestException,
     ForbiddenException,
     Injectable,
+    Logger,
     NotFoundException,
 } from '@nestjs/common';
 import {
@@ -16,17 +17,21 @@ import { IdempotencyService } from '../../common/idempotency/idempotency.service
 import { AccountsService } from '../accounts/accounts.service.js';
 import { KycService } from '../kyc/kyc.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { CreateTransferDto } from './dto/create-transfer.dto.js';
 import { DepositDto } from './dto/deposit.dto.js';
 
 @Injectable()
 export class TransfersService {
+    private readonly logger = new Logger(TransfersService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly accountsService: AccountsService,
         private readonly ledgerService: LedgerService,
         private readonly idempotencyService: IdempotencyService,
         private readonly kycService: KycService,
+        private readonly notificationsService: NotificationsService,
     ) { }
 
     /**
@@ -202,7 +207,7 @@ export class TransfersService {
             throw new NotFoundException('One or more account ledger wallets could not be found.');
         }
 
-        return this.prisma.$transaction(async (tx) => {
+        const result = await this.prisma.$transaction(async (tx) => {
             await this.idempotencyService.recordInProgress(tx, {
                 customerId,
                 key: idempotencyKey,
@@ -261,6 +266,68 @@ export class TransfersService {
 
             return responsePayload;
         });
+
+        // Enqueue background debit & credit alerts via BullMQ (non-blocking)
+        this.dispatchTransferAlerts(
+            customerId,
+            sourceAccount,
+            destinationAccount,
+            dto.amount,
+            result.id,
+        ).catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            this.logger.error(`Failed to dispatch transfer alerts: ${message}`);
+        });
+
+        return result;
+    }
+
+    private async dispatchTransferAlerts(
+        senderCustomerId: string,
+        sourceAccount: { id: string; accountNumber: string; currency: string },
+        destinationAccount: { id: string; accountNumber: string; currency: string; customerId: string },
+        amount: string,
+        reference: string,
+    ): Promise<void> {
+        const [sender, recipient] = await Promise.all([
+            this.prisma.customer.findUnique({
+                where: { id: senderCustomerId },
+                select: { email: true, phone: true, firstName: true, lastName: true },
+            }),
+            this.prisma.customer.findUnique({
+                where: { id: destinationAccount.customerId },
+                select: { email: true, phone: true, firstName: true, lastName: true },
+            }),
+        ]);
+
+        const senderTarget = sender?.phone ?? sender?.email;
+        const recipientTarget = recipient?.phone ?? recipient?.email;
+        const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : sourceAccount.accountNumber;
+        const recipientName = recipient ? `${recipient.firstName} ${recipient.lastName}`.trim() : destinationAccount.accountNumber;
+
+        if (senderTarget) {
+            await this.notificationsService.sendTransferAlert({
+                to: senderTarget,
+                accountNumber: sourceAccount.accountNumber,
+                type: 'DEBIT',
+                amount,
+                currency: sourceAccount.currency,
+                counterparty: recipientName,
+                reference,
+            });
+        }
+
+        if (recipientTarget) {
+            await this.notificationsService.sendTransferAlert({
+                to: recipientTarget,
+                accountNumber: destinationAccount.accountNumber,
+                type: 'CREDIT',
+                amount,
+                currency: destinationAccount.currency,
+                counterparty: senderName,
+                reference,
+            });
+        }
     }
 
     /**

@@ -23,6 +23,7 @@ describe('TransfersService', () => {
     let mockLedgerService: any;
     let mockIdempotencyService: any;
     let mockKycService: any;
+    let mockNotificationsService: any;
 
     beforeEach(() => {
         mockPrisma = {
@@ -30,6 +31,15 @@ describe('TransfersService', () => {
             transfer: {
                 findUnique: vi.fn(),
                 create: vi.fn(),
+            },
+            customer: {
+                findUnique: vi.fn().mockResolvedValue({
+                    id: 'c-1',
+                    email: 'test@bank.com',
+                    phone: '+2348012345678',
+                    firstName: 'John',
+                    lastName: 'Doe',
+                }),
             },
         };
 
@@ -55,12 +65,17 @@ describe('TransfersService', () => {
             checkTransferLimit: vi.fn().mockResolvedValue(undefined),
         };
 
+        mockNotificationsService = {
+            sendTransferAlert: vi.fn().mockResolvedValue(undefined),
+        };
+
         service = new TransfersService(
             mockPrisma as unknown as PrismaService,
             mockAccountsService as unknown as AccountsService,
             mockLedgerService as unknown as LedgerService,
             mockIdempotencyService as unknown as IdempotencyService,
             mockKycService as any,
+            mockNotificationsService as any,
         );
     });
 

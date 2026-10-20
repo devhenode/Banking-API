@@ -19,6 +19,23 @@ services:
     networks:
       - banking-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: banking-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - banking-network
+
+
   api:
     build:
       context: .
@@ -30,13 +47,17 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-banking_db}?schema=public
       JWT_SECRET: ${JWT_SECRET:-default_banking_jwt_super_secret_key_change_me_in_prod}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -46,6 +67,7 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
 
 networks:
   banking-network:
