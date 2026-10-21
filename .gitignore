@@ -13,3 +13,7 @@ claude-former/
 
 # Spec Kit planning artifacts
 specs/
+
+# Load testing artifacts
+load-tests/test-data.json
+load-tests/reports/
