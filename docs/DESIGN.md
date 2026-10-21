@@ -1,9 +1,9 @@
 # 🏦 Banking API — Design Document
 
-> **Status:** Living document · Phase 3 (Asynchronous Processing & Queues)
-> **Last updated:** 2026-10-20
+> **Status:** Living document · Phase 4 (High-Throughput Concurrency, Load Proof & Database Tuning)
+> **Last updated:** 2026-10-21
 
-This document records the architecture of the Banking API and the reasoning behind each decision. Every decision is also listed in the [Decision Log](#13--decision-log).
+This document records the architecture of the Banking API and the reasoning behind each decision. Every decision is also listed in the [Decision Log](#14--decision-log).
 
 ---
 
@@ -21,8 +21,9 @@ This document records the architecture of the Banking API and the reasoning behi
 10. [Engineering Standards](#10--engineering-standards)
 11. [Delivery & Containerization Architecture (Phase 2)](#11--delivery--containerization-architecture-phase-2)
 12. [Asynchronous Queues & Background Processing (Phase 3)](#12--asynchronous-queues--background-processing-phase-3)
-13. [Decision Log](#13--decision-log)
-14. [Open Questions](#14--open-questions)
+13. [High-Throughput Concurrency, Load Proof & Database Tuning (Phase 4)](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4)
+14. [Decision Log](#14--decision-log)
+15. [Open Questions](#15--open-questions)
 
 ---
 
@@ -950,7 +951,68 @@ flowchart TD
 
 ---
 
-## 13. 📋 Decision Log
+## 13. ⚡ High-Throughput Concurrency, Load Proof & Database Tuning (Phase 4)
+
+In commercial banking, money transfer engines must endure catastrophic spikes in concurrency (e.g. Black Friday flash sales, concert ticket drops, or mass payroll releases) without deadlocking or allowing balance drift.
+
+Phase 4 subjected the Banking API to rigorous load testing using **k6 v2.3.0** across two foundational stress scenarios:
+
+### 13.1 Scenario A: Hot-Account Row Contention Architecture
+
+When thousands of customers pay the exact same merchant at the exact same millisecond, multiple transactions contend for exclusive write locks on that single `ledger_accounts` row.
+
+```mermaid
+flowchart TD
+    VU1["Virtual User 01"] -->|"POST /transfers"| API["Banking API (NestJS 12)"]
+    VU2["Virtual User 02"] -->|"POST /transfers"| API
+    VU50["Virtual User 50"] -->|"POST /transfers"| API
+
+    API -->|"id ASC Sorted Locking"| LockQueue["PostgreSQL Row-Lock Queue<br/>(SELECT ... FOR UPDATE)"]
+    LockQueue -->|"Tx 1 acquires lock"| MerchantRow["Merchant Ledger Row<br/>(Acquire -> Post -> Commit)"]
+    MerchantRow -->|"Tx 1 releases lock"| LockQueue
+    LockQueue -->|"Tx 2 acquires lock"| MerchantRow
+```
+
+#### Empirical Results
+* **Concurrency:** 50 concurrent Virtual Users hammering merchant account `6121823541`.
+* **Throughput:** **184.17 requests / second** (5,532 transfers completed in 30 seconds).
+* **Deadlock Frequency:** **0.00%** (0 deadlocks out of 5,532 attempts).
+* **Balance Drift:** **0 kobo** (Exact to the minor unit).
+* **p95 Latency:** **222.19 ms** · **p99 Latency:** **378.70 ms**.
+
+---
+
+### 13.2 Scenario B: Dispersed Load & Connection Pool Multiplexing
+
+When accounts transfer money across dispersed pairs (ring topology: Sender $i \to$ Sender $i+1$), single-row contention disappears, and the bottleneck shifts to **PostgreSQL connection pool multiplexing**.
+
+```mermaid
+flowchart TD
+    Clients["100 Concurrent Virtual Users"] -->|"Ring Transfers"| NestApp["NestJS Event Loop"]
+    NestApp -->|"PrismaPg Adapter"| Pool["Tuned Connection Pool<br/>(max: 30 sockets)"]
+
+    Pool -->|"Socket 1..10"| DB1["Active Transactions (1..10)"]
+    Pool -->|"Socket 11..20"| DB2["Active Transactions (11..20)"]
+    Pool -->|"Socket 21..30"| DB3["Active Transactions (21..30)"]
+
+    DB1 -->|"Commit & Release"| Pool
+    DB2 -->|"Commit & Release"| Pool
+    DB3 -->|"Commit & Release"| Pool
+```
+
+#### Connection Pool Tuning Transformation
+By upgrading the default `pg.Pool` configuration in [PrismaService](file:///Users/macbook/Documents/GitHub/Banking-API/src/infrastructure/prisma/prisma.service.ts) from default `max: 10` to `max: 30` with `connectionTimeoutMillis: 5000`:
+* **Throughput:** Increased from 117.88 RPS to **211.34 RPS** (+79.3% throughput gain).
+* **Error Rate:** Dropped from 0.07% (timeouts) to **0.00%** (0 errors out of 7,397 requests).
+* **p95 Latency:** Slashed from 2,350 ms down to **483.66 ms** (4.8x faster).
+* **p99 Latency:** Slashed from 5,530 ms down to **552.52 ms** (10.0x faster).
+* **Max Latency:** Dropped from 6,300 ms down to **968.90 ms** (Sub-second peak).
+
+Full benchmark documentation is available in [BENCHMARKS.md](file:///Users/macbook/Documents/GitHub/Banking-API/docs/BENCHMARKS.md).
+
+---
+
+## 14. 📋 Decision Log
 
 | ID | Decision | Section |
 |:---:|---|:---:|
@@ -983,16 +1045,17 @@ flowchart TD
 | ADR-27 | Decoupled BullMQ background job processing with exponential backoff retries for external communications | [12](#12--asynchronous-queues--background-processing-phase-3) |
 | ADR-28 | Autonomous scheduled midnight double-entry ledger reconciliation audit (`@nestjs/schedule`) | [12](#12--asynchronous-queues--background-processing-phase-3) |
 | ADR-29 | Post-commit asynchronous dispatching of debit and credit transaction alerts | [12](#12--asynchronous-queues--background-processing-phase-3) |
+| ADR-30 | Deterministic Lexicographical Row-Locking (`ORDER BY id ASC FOR UPDATE`) under High Load | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
+| ADR-31 | PostgreSQL Driver Adapter (`PrismaPg`) Connection Pool Tuning (`max: 30`, `idleTimeoutMillis: 30000`, `connectionTimeoutMillis: 5000`) | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
+| ADR-32 | Automated Post-Load Double-Entry Accounting Audit for Balance Drift Detection | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
 
 ---
 
----
+## 15. ❓ Open Questions
 
-## 14. ❓ Open Questions
-
-| # | Question | Notes |
-|:---:|---|---|
-| 1 | How are NUBAN serials generated? | A database sequence + check digit, or random + retry on collision |
-| 2 | What are the daily limits per tier? | e.g. Tier 1 ₦50k, Tier 2 ₦200k, Tier 3 ₦5m |
-| 3 | Pessimistic locks vs optimistic locking vs conditional `UPDATE` | Pessimistic for now; revisit under load testing in Phase 4 |
-| 4 | Should accounts support "Post No Debit" (PND)? | Incoming money allowed, outgoing blocked; common during fraud or KYC reviews |
+| # | Question | Status | Notes |
+|:---:|---|:---:|---|
+| 1 | How are NUBAN serials generated? | Resolved | 9 random serial digits + 1 Central Bank of Nigeria check digit with collision retry loop |
+| 2 | What are the daily limits per tier? | Resolved | Tier 1: ₦50k/day, Tier 2: ₦200k/day, Tier 3: ₦5m/day |
+| 3 | Pessimistic locks vs optimistic locking vs conditional `UPDATE` | **Resolved & Proven** | Pessimistic sorted locks sustained 211+ RPS under 100 concurrent VUs with 0 deadlocks, 0 balance drift, and sub-second p99 latency |
+| 4 | Should accounts support "Post No Debit" (PND)? | Open | Incoming money allowed, outgoing blocked; common during fraud or KYC reviews |
