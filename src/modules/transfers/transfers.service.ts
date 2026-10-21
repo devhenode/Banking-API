@@ -18,6 +18,7 @@ import { AccountsService } from '../accounts/accounts.service.js';
 import { KycService } from '../kyc/kyc.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { OutboxService } from '../outbox/outbox.service.js';
 import { CreateTransferDto } from './dto/create-transfer.dto.js';
 import { DepositDto } from './dto/deposit.dto.js';
 
@@ -32,6 +33,7 @@ export class TransfersService {
         private readonly idempotencyService: IdempotencyService,
         private readonly kycService: KycService,
         private readonly notificationsService: NotificationsService,
+        private readonly outboxService: OutboxService,
     ) { }
 
     /**
@@ -83,6 +85,7 @@ export class TransfersService {
                 requestHash,
             });
 
+
             const clearingAccount = await this.ledgerService.getOrCreateSystemAccount(tx, {
                 code: `CLEARING_${currency}`,
                 type: LedgerAccountType.ASSET,
@@ -116,6 +119,23 @@ export class TransfersService {
                     status: TransferStatus.COMPLETED,
                     journalEntryId: journalEntry.id,
                     description: dto.description ?? 'Account deposit',
+                },
+            });
+
+            // Transactional Outbox: atomically persist event alongside the transfer
+            await this.outboxService.emit(tx, {
+                aggregateType: 'Transfer',
+                aggregateId: transfer.id,
+                eventType: 'banking.transfers.deposited',
+                payload: {
+                    transferId: transfer.id,
+                    destinationAccountId: account.id,
+                    amount: transfer.amount.toString(),
+                    currency: transfer.currency,
+                    customerId,
+                    journalEntryId: journalEntry.id,
+                    description: dto.description ?? 'Account deposit',
+                    createdAt: transfer.createdAt.toISOString(),
                 },
             });
 
@@ -242,6 +262,24 @@ export class TransfersService {
                     status: TransferStatus.COMPLETED,
                     journalEntryId: journalEntry.id,
                     description: dto.description ?? 'Account transfer',
+                },
+            });
+
+            // Transactional Outbox: atomically persist event alongside the transfer
+            await this.outboxService.emit(tx, {
+                aggregateType: 'Transfer',
+                aggregateId: transfer.id,
+                eventType: 'banking.transfers.completed',
+                payload: {
+                    transferId: transfer.id,
+                    sourceAccountId: sourceAccount.id,
+                    destinationAccountId: destinationAccount.id,
+                    amount: transfer.amount.toString(),
+                    currency: sourceAccount.currency,
+                    customerId,
+                    journalEntryId: journalEntry.id,
+                    description: dto.description ?? 'Account transfer',
+                    createdAt: transfer.createdAt.toISOString(),
                 },
             });
 

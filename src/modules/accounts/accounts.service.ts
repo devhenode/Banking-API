@@ -8,6 +8,7 @@ import {
 import { AccountStatus, AccountType, CustomerStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
+import { OutboxService } from '../outbox/outbox.service.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { NubanService } from './nuban.service.js';
 
@@ -17,6 +18,7 @@ export class AccountsService {
     private readonly prisma: PrismaService,
     private readonly ledgerService: LedgerService,
     private readonly nubanService: NubanService,
+    private readonly outboxService: OutboxService,
   ) {}
 
   /**
@@ -77,6 +79,21 @@ export class AccountsService {
       await this.ledgerService.createCustomerAccount(tx, {
         accountId: account.id,
         currency,
+      });
+
+      // Transactional Outbox: atomically persist account opening event
+      await this.outboxService.emit(tx, {
+        aggregateType: 'Account',
+        aggregateId: account.id,
+        eventType: 'banking.accounts.opened',
+        payload: {
+          accountId: account.id,
+          customerId: customer.id,
+          accountNumber: account.accountNumber,
+          currency: account.currency,
+          type: account.type,
+          createdAt: account.createdAt.toISOString(),
+        },
       });
 
       return account;

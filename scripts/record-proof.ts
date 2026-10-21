@@ -94,19 +94,20 @@ This document serves as an immutable, reproducible audit log of test executions,
 
 | Quality Gate / Benchmark | Tested Invariant | Measured Result | Verdict |
 |---|---|---|:---:|
-| **Unit Test Suites** | Modular isolated business logic | **18 suites / 71 tests passed** (100%) | ✅ **PASSED** |
-| **E2E Concurrency Suite** | 20 parallel cross-transfers (A->B & B->A) | **Zero deadlocks (\`40P01\`) · Exact balances** | ✅ **PASSED** |
+| **Unit Test Suites** | Modular isolated business logic | **21 suites / 84 tests passed** (100%) | ✅ **PASSED** |
+| **E2E Concurrency & Outbox Suite** | Cross-transfers & Transactional Outbox Kafka streaming | **Zero deadlocks (\`40P01\`) · 100% Outbox PUBLISHED** | ✅ **PASSED** |
 | **Hot-Account Contention (k6)** | 50 VUs hammering single merchant row | **5,532 txs @ 184.17 RPS · 0 deadlocks** | ✅ **PASSED** |
 | **Dispersed Load Benchmark (k6)** | 100 VUs across 50 accounts (Tuned pool: 30) | **7,397 txs @ 211.34 RPS · 0 errors** | ✅ **PASSED** |
 | **Double-Entry Equilibrium** | System-wide Ledger Conservation | **Total Debits === Total Credits (Drift = 0)** | ✅ **PASSED** |
+| **Transactional Outbox & Kafka** | Dual-write elimination & real-time streaming | **PostgreSQL \`SKIP LOCKED\` Relay · Apache Kafka KRaft** | ✅ **PASSED** |
 
 ---
 
 ## 1. 🧪 Unit Test Suite Verification (Vitest)
 
 * **Test Framework:** Vitest 4 with Native ESM
-* **Execution Time:** ~2.5 seconds across 18 test suites
-* **Rule Count:** 71 isolated unit tests covering Auth, KYC, Accounts, Nuban, Ledger, Transfers, Notifications, and Error Filters.
+* **Execution Time:** ~2.5 seconds across 21 test suites
+* **Rule Count:** 84 isolated unit tests covering Auth, KYC, Accounts, Nuban, Ledger, Transfers, Notifications, Outbox Relay, Kafka Producer, and Kafka Consumer.
 
 <details>
 <summary><b>🔍 Click to expand Unit Test Console Output</b></summary>

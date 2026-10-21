@@ -3,8 +3,10 @@
 > An enterprise-grade, commercial core banking engine engineered with **NestJS 12**, **Prisma 7**, **PostgreSQL 16**, and **Redis 7**. Built on **strict double-entry bookkeeping**, **deadlock-immune pessimistic row locking**, **two-phase idempotency**, and **asynchronous worker queues**.
 
 [![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen?logo=githubactions&logoColor=white)](https://github.com/devhenode/Banking-API/actions)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-71%20Passed-brightgreen?logo=vitest&logoColor=white)](docs/TEST_RESULTS.md#1--unit-test-suite-verification-vitest)
-[![E2E Stress](https://img.shields.io/badge/E2E%20Concurrency-20%20Parallel%20Txs-blue?logo=vitest&logoColor=white)](docs/TEST_RESULTS.md#2--end-to-end-concurrency-stress-suite-vitest-e2e)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-84%20Passed-brightgreen?logo=vitest&logoColor=white)](docs/TEST_RESULTS.md#1--unit-test-suite-verification-vitest)
+[![E2E Stress](https://img.shields.io/badge/E2E%20Concurrency-3%20Suites%20Passed-blue?logo=vitest&logoColor=white)](docs/TEST_RESULTS.md#2--end-to-end-concurrency-stress-suite-vitest-e2e)
+[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-KRaft%20Streaming-231F20?logo=apachekafka&logoColor=white)](docs/DESIGN.md#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6)
+[![Transactional Outbox](https://img.shields.io/badge/Transactional%20Outbox-Zero%20Dual--Write-blue)](docs/DESIGN.md#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6)
 [![k6 Load Tested](https://img.shields.io/badge/k6%20Load%20Tested-211%2B%20RPS-success?logo=k6&logoColor=white)](docs/BENCHMARKS.md)
 [![Deadlocks](https://img.shields.io/badge/Deadlocks-0%20Detected-brightgreen)](#-empirical-concurrency--load-proof)
 [![Balance Drift](https://img.shields.io/badge/Balance%20Drift-0%20kobo-brightgreen)](#-empirical-concurrency--load-proof)
@@ -32,6 +34,7 @@
 * **🪪 3-Tier KYC Progression & Spending Caps:** Automated tier verification (NIN → BVN + Proof of Address → Biometric Liveness) enforcing real-time daily spending limit ceilings (₦50,000 / ₦200,000 / ₦5,000,000).
 * **📬 Decoupled Asynchronous Worker Queues:** Redis 7 + BullMQ queue workers dispatching OTPs and transaction alerts with exponential backoff retries (1s, 2s, 4s) outside the critical transaction path.
 * **⏰ Autonomous Midnight Ledger Audit:** Automated cron service (`@nestjs/schedule`) executing daily at `00:00:00 UTC` to audit system-wide financial equilibrium.
+* **📡 Transactional Outbox Pattern & Apache Kafka Streaming:** Atomically commits domain events (`banking.transfers.completed`, `banking.accounts.opened`) into PostgreSQL within the same ACID transaction, eliminating dual-write hazards. An autonomous sweeper uses `SELECT ... FOR UPDATE SKIP LOCKED` to reliably stream events to Apache Kafka KRaft broker with partition-key FIFO ordering.
 
 ---
 
@@ -188,8 +191,8 @@ flowchart TD
     P2["Phase 2: Delivery & CI/CD ✅<br/>(Docker Alpine, Compose mesh, GitHub Actions 6-tier gates)"]
     P3["Phase 3: Background Workers & Queues ✅<br/>(Redis 7, BullMQ retries, Midnight cron ledger audit)"]
     P4["Phase 4: Concurrency Proof & Load Tests ✅<br/>(k6 load proof, 211+ RPS, 0 deadlocks, Pool tuned to 30)"]
-    P5["Phase 5: Domain Events & Transactional Outbox ⏳<br/>(Atomic Outbox table, Dual-write elimination)"]
-    P6["Phase 6: Distributed Streaming (Kafka)<br/>(Audit stream, Real-time AML fraud detection)"]
+    P5["Phase 5: Domain Events & Transactional Outbox ✅<br/>(Atomic Outbox table, Dual-write elimination, SKIP LOCKED)"]
+    P6["Phase 6: Distributed Streaming (Kafka) ✅<br/>(Apache Kafka KRaft, Partition keys, Audit consumer)"]
     P7["Phase 7: Microservices & Platform Ops<br/>(Extracted Auth/Ledger/Transfer services, Observability)"]
 
     P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
@@ -202,8 +205,8 @@ flowchart TD
 | **2** | **Delivery & CI/CD** | ✅ Done | Multi-stage Docker Alpine (`USER node`), 6-tier GitHub Actions quality gates. |
 | **3** | **Workers & Queues** | ✅ Done | BullMQ + Redis 7 queue buffer, exponential backoff retries, midnight cron ledger audit. |
 | **4** | **Concurrency & Load Tuning** | ✅ Done | k6 concurrency proof (184 RPS hot account, 211 RPS dispersed), pool tuned to 30, 0 drift. |
-| **5** | **Domain Events & Outbox** | ⏳ Next | Atomic Transactional Outbox table, dual-write elimination, reliable CDC publisher. |
-| **6** | **Distributed Streaming** | ⏳ Planned | Apache Kafka event-driven ledger stream, real-time AML fraud consumer. |
+| **5** | **Domain Events & Outbox** | ✅ Done | Atomic Transactional Outbox in PostgreSQL, dual-write hazard eliminated, `SKIP LOCKED` parallel worker sweeper. |
+| **6** | **Distributed Streaming** | ✅ Done | Apache Kafka 3.7 KRaft mode, partition-key FIFO ordering, real-time decoupled audit consumer. |
 | **7** | **Microservices Architecture** | ⏳ Planned | Bounded context service extraction (Auth, Accounts, Ledger, Payments), OpenTelemetry tracing. |
 
 ---

@@ -9,6 +9,7 @@ import { TransfersModule } from './modules/transfers/transfers.module.js';
 import { PrismaModule } from './infrastructure/prisma/prisma.module.js';
 import { AccountsModule } from './modules/accounts/accounts.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { OutboxModule } from './modules/outbox/outbox.module.js';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -35,6 +36,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     PrismaModule,
     AccountsModule,
     NotificationsModule,
+    OutboxModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -5,9 +5,10 @@ import { NubanService } from './nuban.service.js';
 import { PrismaModule } from '../../infrastructure/prisma/prisma.module.js';
 import { LedgerModule } from '../ledger/ledger.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { OutboxModule } from '../outbox/outbox.module.js';
 
 @Module({
-  imports: [PrismaModule, LedgerModule, AuthModule],
+  imports: [PrismaModule, LedgerModule, AuthModule, OutboxModule],
   controllers: [AccountsController],
   providers: [AccountsService, NubanService],
   exports: [AccountsService],

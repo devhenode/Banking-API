@@ -22,8 +22,9 @@ This document records the architecture of the Banking API and the reasoning behi
 11. [Delivery & Containerization Architecture (Phase 2)](#11--delivery--containerization-architecture-phase-2)
 12. [Asynchronous Queues & Background Processing (Phase 3)](#12--asynchronous-queues--background-processing-phase-3)
 13. [High-Throughput Concurrency, Load Proof & Database Tuning (Phase 4)](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4)
-14. [Decision Log](#14--decision-log)
-15. [Open Questions](#15--open-questions)
+14. [Domain Events, Transactional Outbox & Distributed Streaming with Apache Kafka (Phase 5 & 6)](#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6)
+15. [Decision Log](#15--decision-log)
+16. [Open Questions](#16--open-questions)
 
 ---
 
@@ -1010,9 +1011,87 @@ By upgrading the default `pg.Pool` configuration in [PrismaService](file:///User
 
 Full benchmark documentation is available in [BENCHMARKS.md](file:///Users/macbook/Documents/GitHub/Banking-API/docs/BENCHMARKS.md).
 
+Full benchmark documentation is available in [BENCHMARKS.md](file:///Users/macbook/Documents/GitHub/Banking-API/docs/BENCHMARKS.md).
+
 ---
 
-## 14. 📋 Decision Log
+## 14. 📡 Domain Events, Transactional Outbox & Distributed Streaming with Apache Kafka (Phase 5 & 6)
+
+### 14.1 The Dual-Write Problem
+In distributed banking architectures, a common failure mode is the **Dual-Write Hazard**:
+1. **Scenario A (Network drop after DB commit):** The application updates account balances and commits the PostgreSQL transaction. Then, it attempts to publish an event across the network to Apache Kafka. The network drops, the Kafka broker times out, or the process crashes. Result: The money moved in the database, but downstream fraud, notification, and compliance services never received the event.
+2. **Scenario B (Database rollback after Kafka publish):** The application publishes an event to Kafka first, then attempts to commit the database transaction. PostgreSQL rejects the transaction (e.g., balance exhaustion or constraint violation). Result: Phantom money moved across Kafka, triggering false notifications and ledger anomalies.
+
+To achieve 100% financial consistency, **network calls must never occur inside or immediately adjacent to database transactions**.
+
+```mermaid
+flowchart TD
+    subgraph AntiPattern["❌ The Dual-Write Hazard"]
+        direction TB
+        App1["Banking API"] -->|"1. Commit ACID Tx"| DB1[("PostgreSQL")]
+        App1 -.->|"2. Network Failure!"| BrokenKafka[("Apache Kafka<br/>(Event Silently Lost!)")]
+    end
+    subgraph OutboxPattern["✅ The Transactional Outbox Pattern"]
+        direction TB
+        App2["Banking API"] -->|"Atomic Tx: Money + Outbox Row"| DB2[("PostgreSQL<br/>outbox_events")]
+        DB2 -->|"Async Relay Sweeper<br/>(SKIP LOCKED)"| Relay["OutboxRelayService"]
+        Relay -->|"Guaranteed Delivery"| HealthyKafka[("Apache Kafka<br/>(Streamed Reliably)")]
+    end
+```
+
+### 14.2 The Padlock & Prototype Framework Mental Model
+
+1. **The Anchor (Human Purpose):** If a customer transfers ₦50,000, we must notify downstream fraud analyzers and central bank compliance without ever creating phantom money or dropping real audit events, even if Kafka is down for maintenance.
+2. **The Mini-Me (Scale it Down):** For a single ₦10 transfer, exactly 2 database rows are inserted in the exact same database split-second: 
+   * Row 1: The `transfers` record (status: `COMPLETED`).
+   * Row 2: The `outbox_events` record (status: `PENDING`).
+3. **The Crash Test (Simulate Failure):**
+   * *Crash Test A (Database rollback):* If the transfer fails KYC or balance rules, PostgreSQL rolls back *both* the transfer and the outbox row. Zero ghost messages.
+   * *Crash Test B (Kafka broker crash):* If Kafka goes offline, transfers continue to succeed. Outbox rows simply queue safely in PostgreSQL as `PENDING`. When Kafka recovers, the sweeper picks up the pending backlog and resumes streaming with zero data loss.
+4. **The Logic (Physical Equivalent):** The **Bank Teller's Outbox Tray**. The teller never walks across town to the post office during a customer's transaction. They drop the transaction receipt into a physical outbox tray on their desk. An internal mail courier walks by every 500ms, empties the tray, and transports the letters.
+
+### 14.3 Architecture & Data Flow
+
+```mermaid
+flowchart LR
+    Client["Client HTTP Request"] -->|"1. POST /transfers"| API["TransfersService"]
+    subgraph PG["PostgreSQL (Single Atomic ACID Transaction)"]
+        direction TB
+        Tx["BEGIN"] --> Locks["Sort & Lock Accounts"]
+        Locks --> Ledger["Post Ledger Journal"]
+        Ledger --> Transfer["Create Transfer Row"]
+        Transfer --> Outbox["Insert outbox_events (PENDING)"]
+        Outbox --> Commit["COMMIT"]
+    end
+    API -->|"Execute"| PG
+    subgraph Sweeper["Outbox Relay Sweeper (Every 500ms)"]
+        direction TB
+        Fetch["SELECT ... FOR UPDATE SKIP LOCKED"] --> Dispatch["Publish to Kafka"]
+        Dispatch --> UpdateStatus["UPDATE status = PUBLISHED"]
+    end
+    PG -->|"Poll Pending"| Sweeper
+    Sweeper -->|"Partition Key: aggregateId"| Kafka[("Apache Kafka<br/>topic: banking.transfers")]
+    Kafka -->|"Real-Time Consumer"| Audit["Kafka Consumer<br/>(Audit & Fraud Stream)"]
+```
+
+### 14.4 Safe Parallel Sweeping (`FOR UPDATE SKIP LOCKED`)
+Multiple instances of the Banking API can run concurrently in production without contending for the same outbox events. The relay sweeper utilizes:
+
+```sql
+SELECT id, aggregate_type, aggregate_id, event_type, payload
+FROM outbox_events
+WHERE status = 'PENDING'
+ORDER BY created_at ASC
+LIMIT 50
+FOR UPDATE SKIP LOCKED;
+```
+
+* **Zero Lock Contention:** `SKIP LOCKED` instructs PostgreSQL to immediately ignore rows currently locked by another worker thread or container pod, allowing horizontal worker scaling with zero lock wait timeouts.
+* **Strict Aggregate Ordering:** Kafka messages are keyed by `aggregateId` (e.g. `transferId` or `accountId`), guaranteeing that events for any given entity land on the exact same Kafka partition and maintain FIFO ordering.
+
+---
+
+## 15. 📋 Decision Log
 
 | ID | Decision | Section |
 |:---:|---|:---:|
@@ -1048,10 +1127,14 @@ Full benchmark documentation is available in [BENCHMARKS.md](file:///Users/macbo
 | ADR-30 | Deterministic Lexicographical Row-Locking (`ORDER BY id ASC FOR UPDATE`) under High Load | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
 | ADR-31 | PostgreSQL Driver Adapter (`PrismaPg`) Connection Pool Tuning (`max: 30`, `idleTimeoutMillis: 30000`, `connectionTimeoutMillis: 5000`) | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
 | ADR-32 | Automated Post-Load Double-Entry Accounting Audit for Balance Drift Detection | [13](#13--high-throughput-concurrency-load-proof--database-tuning-phase-4) |
+| ADR-33 | Transactional Outbox Pattern for Zero-Loss Domain Event Atomicity | [14](#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6) |
+| ADR-34 | Safe Distributed Outbox Sweeping via PostgreSQL `FOR UPDATE SKIP LOCKED` | [14](#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6) |
+| ADR-35 | Distributed Event Streaming & Decoupled Consumer Ingestion via Apache Kafka (KRaft mode) | [14](#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6) |
+| ADR-36 | Partition Key Ordering by Aggregate Identifier for Strict FIFO Sequencing | [14](#14--domain-events-transactional-outbox--distributed-streaming-with-apache-kafka-phase-5--6) |
 
 ---
 
-## 15. ❓ Open Questions
+## 16. ❓ Open Questions
 
 | # | Question | Status | Notes |
 |:---:|---|:---:|---|
@@ -1059,3 +1142,4 @@ Full benchmark documentation is available in [BENCHMARKS.md](file:///Users/macbo
 | 2 | What are the daily limits per tier? | Resolved | Tier 1: ₦50k/day, Tier 2: ₦200k/day, Tier 3: ₦5m/day |
 | 3 | Pessimistic locks vs optimistic locking vs conditional `UPDATE` | **Resolved & Proven** | Pessimistic sorted locks sustained 211+ RPS under 100 concurrent VUs with 0 deadlocks, 0 balance drift, and sub-second p99 latency |
 | 4 | Should accounts support "Post No Debit" (PND)? | Open | Incoming money allowed, outgoing blocked; common during fraud or KYC reviews |
+| 5 | What is the retention policy for `outbox_events` table? | Open | Purge published events older than 30 days via a scheduled partition drop or archive worker |

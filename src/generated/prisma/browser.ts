@@ -67,3 +67,8 @@ export type Transfer = Prisma.TransferModel
  * 
  */
 export type KycVerification = Prisma.KycVerificationModel
+/**
+ * Model OutboxEvent
+ * 
+ */
+export type OutboxEvent = Prisma.OutboxEventModel

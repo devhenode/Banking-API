@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module.js';
 import { KycModule } from '../kyc/kyc.module.js';
 import { LedgerModule } from '../ledger/ledger.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { OutboxModule } from '../outbox/outbox.module.js';
 import { TransfersController } from './transfers.controller.js';
 import { TransfersService } from './transfers.service.js';
 
@@ -18,6 +19,7 @@ import { TransfersService } from './transfers.service.js';
         IdempotencyModule,
         KycModule,
         NotificationsModule,
+        OutboxModule,
     ],
     controllers: [TransfersController],
     providers: [TransfersService],

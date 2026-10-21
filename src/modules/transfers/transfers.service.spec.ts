@@ -24,6 +24,7 @@ describe('TransfersService', () => {
     let mockIdempotencyService: any;
     let mockKycService: any;
     let mockNotificationsService: any;
+    let mockOutboxService: any;
 
     beforeEach(() => {
         mockPrisma = {
@@ -69,6 +70,10 @@ describe('TransfersService', () => {
             sendTransferAlert: vi.fn().mockResolvedValue(undefined),
         };
 
+        mockOutboxService = {
+            emit: vi.fn().mockResolvedValue({ id: 'outbox-1' }),
+        };
+
         service = new TransfersService(
             mockPrisma as unknown as PrismaService,
             mockAccountsService as unknown as AccountsService,
@@ -76,6 +81,7 @@ describe('TransfersService', () => {
             mockIdempotencyService as unknown as IdempotencyService,
             mockKycService as any,
             mockNotificationsService as any,
+            mockOutboxService as any,
         );
     });
 
@@ -189,6 +195,13 @@ describe('TransfersService', () => {
                     customerId: 'cust-1',
                     key: 'key-1',
                     responseCode: 201,
+                }),
+            );
+            expect(mockOutboxService.emit).toHaveBeenCalledWith(
+                mockTx,
+                expect.objectContaining({
+                    aggregateType: 'Transfer',
+                    eventType: 'banking.transfers.deposited',
                 }),
             );
         });
@@ -321,6 +334,13 @@ describe('TransfersService', () => {
             );
             expect(result.status).toBe(TransferStatus.COMPLETED);
             expect(result.amount).toBe('3000');
+            expect(mockOutboxService.emit).toHaveBeenCalledWith(
+                mockTx,
+                expect.objectContaining({
+                    aggregateType: 'Transfer',
+                    eventType: 'banking.transfers.completed',
+                }),
+            );
         });
     });
 

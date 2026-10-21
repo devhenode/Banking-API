@@ -1,9 +1,7 @@
-# 🏦 Banking API — Spec-Driven Development (SDD) Specification Overview
-
 > **Document Purpose:** Central architectural baseline for Spec-Driven Development (SDD).  
 > **Constitutional Authority:** Complies with [.specify/memory/constitution.md](file:///Users/macbook/Documents/GitHub/Banking-API/.specify/memory/constitution.md).  
 > **Mental Model Baseline:** Governed by [The Padlock & Prototype Framework](file:///Users/macbook/Documents/GitHub/Banking-API/docs/padlock_and_prototype_framework.md).  
-> **Status:** Phases 1, 2, 3, and 4 100% Complete & Verified · Ready for Phase 5 (Domain Events & Transactional Outbox).
+> **Status:** Phases 1, 2, 3, 4, 5, and 6 100% Complete & Verified · Ready for Phase 7 (Microservices & Platform Ops).
 
 ---
 
@@ -68,6 +66,8 @@ Phases 1, 2, and 3 are **100% complete, verified, and committed**. The platform 
 | **11** | **Asynchronous Queue Engine (Phase 3)** | ✅ Done | [notifications.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/notifications/notifications.service.ts)<br/>[notification.processor.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/notifications/notification.processor.ts) | BullMQ + Redis 7 queue buffer, exponential backoff retries (1s, 2s, 4s), non-blocking OTP and transfer alerts. |
 | **12** | **Midnight Ledger Audit (Phase 3)** | ✅ Done | [ledger-reconciliation.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/ledger/ledger-reconciliation.service.ts) | Scheduled cron worker at `00:00:00 UTC` asserting system-wide double-entry equilibrium ($\Delta = 0$). |
 | **13** | **Concurrency Load Proof & Tuning (Phase 4)** | ✅ Done | [BENCHMARKS.md](file:///Users/macbook/Documents/GitHub/Banking-API/docs/BENCHMARKS.md)<br/>[prisma.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/infrastructure/prisma/prisma.service.ts) | k6 load proof: 12,929 txs, 211+ RPS, 0 deadlocks, 0 drift. Pool tuned from 10 to 30 (10x latency drop). |
+| **14** | **Transactional Outbox Engine (Phase 5)** | ✅ Done | [outbox.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/outbox/outbox.service.ts)<br/>[schema.prisma](file:///Users/macbook/Documents/GitHub/Banking-API/prisma/schema.prisma) | Zero dual-write hazard. Atomically inserts domain events inside the transfer and account opening database transactions. |
+| **15** | **Kafka Distributed Streaming (Phase 6)** | ✅ Done | [kafka.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/infrastructure/kafka/kafka.service.ts)<br/>[outbox-relay.service.ts](file:///Users/macbook/Documents/GitHub/Banking-API/src/modules/outbox/outbox-relay.service.ts) | Apache Kafka 3.7 (KRaft mode). Parallel sweeping via `FOR UPDATE SKIP LOCKED`. Real-time decoupled audit consumer. |
 
 ---
 
@@ -78,27 +78,18 @@ flowchart TD
     P1["Phase 1: Core Monolith ✅<br/>(Double-entry, NUBAN, Idempotency, KYC, Locking)"] --> P2["Phase 2: Delivery & CI/CD ✅<br/>(Docker multi-stage, Compose mesh, GitHub Actions)"]
     P2 --> P3["Phase 3: Background Workers & Queues ✅<br/>(Redis 7, BullMQ workers, Exponential retries, Cron audits)"]
     P3 --> P4["Phase 4: Concurrency Proof & Load Tests ✅<br/>(k6 load proof, 211+ RPS, 0 drift, Pool tuned to 30)"]
-    P4 --> P5["Phase 5: Domain Events & Transactional Outbox ⏳<br/>(Atomic Outbox table, Dual-write elimination)"]
-    P5 --> P6["Phase 6: Distributed Streaming (Kafka)<br/>(Audit stream, Fraud detection, Ledger consumers)"]
+    P4 --> P5["Phase 5: Domain Events & Transactional Outbox ✅<br/>(Atomic Outbox table, Dual-write elimination, SKIP LOCKED)"]
+    P5 --> P6["Phase 6: Distributed Streaming (Kafka) ✅<br/>(Apache Kafka KRaft, Partition keys, Audit consumer)"]
     P6 --> P7["Phase 7: Microservices & Platform Ops<br/>(Extracted Auth/Ledger/Transfer services, Observability)"]
 ```
 
-### Phase 4: High-Throughput Stress Testing & Database Tuning ✅ Complete
-* **k6 Concurrency Suite:** Benchmarked under 50 and 100 concurrent Virtual Users across hot-account contention and dispersed ring transfers.
-* **Connection Pooling Optimization:** Upgraded `PrismaPg` pool configuration (`max: 30`, `idleTimeoutMillis: 30000`, `connectionTimeoutMillis: 5000`), yielding a 79% throughput boost and 10x p99 latency reduction.
-* **Empirical Zero-Drift Audit:** Automated mathematical verification proving 100% accounting balance conservation ($\Delta = 0$). Full documentation in [BENCHMARKS.md](file:///Users/macbook/Documents/GitHub/Banking-API/docs/BENCHMARKS.md).
+### Phase 5: Domain Events & Transactional Outbox Pattern ✅ Complete
+* **Dual-Write Hazard Elimination:** Network calls never occur inside ACID database transactions. Events are persisted to `outbox_events` within the identical transaction client (`tx`) as the ledger entry.
+* **Safe Parallel Worker Sweeping:** Background relay worker periodically selects up to 50 pending events using `SELECT ... FOR UPDATE SKIP LOCKED`, preventing worker lock contention or duplicate publishing across replicas.
 
-### Phase 5: Domain Events & Transactional Outbox Pattern (Next Immediate Phase)
-* **Dual-Write Hazard Elimination:** Guaranteeing that external events (notifications, analytics, compliance hooks) are never lost if the process crashes after a database commit.
-* **Transactional Outbox Table:** Inserting domain events (`TRANSFER_COMPLETED`, `ACCOUNT_OPENED`, `TIER_UPGRADED`) directly inside the same Prisma `$transaction` as the ledger lines.
-* **Reliable Outbox Publisher:** Polling worker or Change Data Capture (CDC) engine publishing committed events with at-least-once delivery guarantees.
-
-### Phase 6: Distributed Event Streaming (Apache Kafka)
-* **Event-Driven Ledger Stream:** Publishing all finalized ledger postings to high-throughput, partitioned Kafka topics (`banking.ledger.events`).
-* **Independent Stream Consumers:**
-  * Real-time AML (Anti-Money Laundering) and fraud detection engine.
-  * Audit and regulatory compliance reporting pipeline.
-  * Real-time customer analytics and notification dispatchers.
+### Phase 6: Distributed Event Streaming (Apache Kafka) ✅ Complete
+* **High-Throughput Partitioned Event Broker:** Apache Kafka 3.7 deployed in KRaft mode (zero ZooKeeper dependency). Messages published with `aggregateId` partition keys to guarantee strict FIFO ordering per account/transfer.
+* **Decoupled Real-Time Consumer:** Built-in `KafkaConsumerService` subscribing to `banking.transfers` and `banking.accounts` with consumer-group offset management.
 
 ### Phase 7: Microservice Extraction & Platform Operations
 * **Service Decomposition:** Decoupling bounded contexts into independent microservices:
